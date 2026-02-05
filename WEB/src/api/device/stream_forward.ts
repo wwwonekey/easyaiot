@@ -210,3 +210,20 @@ export const getStreamForwardTaskStreams = (task_id: number) => {
   }>('get', `${STREAM_FORWARD_PREFIX}/task/${task_id}/streams`);
 };
 
+/**
+ * 确保摄像头存在推流转发任务，如果不存在则自动创建并启动
+ * @param device_id 摄像头ID
+ */
+export const ensureDeviceStreamForwardTask = (device_id: string) => {
+  return commonApi<{
+    code: number;
+    msg: string;
+    data: {
+      task_id: number;
+      task_name: string;
+      task_code: string;
+      is_enabled: boolean;
+    } | null;
+  }>('post', `${STREAM_FORWARD_PREFIX}/device/${device_id}/ensure-task`, {}, {}, true, 'none');
+};
+

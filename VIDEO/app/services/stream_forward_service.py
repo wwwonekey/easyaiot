@@ -315,3 +315,57 @@ def restart_stream_forward_task(task_id: int) -> StreamForwardTask:
         logger.error(f"重启推流转发任务失败: {str(e)}", exc_info=True)
         raise
 
+
+def ensure_device_stream_forward_task(device_id: str) -> Optional[StreamForwardTask]:
+    """确保摄像头存在推流转发任务，如果不存在则自动创建并启动
+    
+    Args:
+        device_id: 摄像头ID
+        
+    Returns:
+        StreamForwardTask: 推流转发任务对象，如果创建失败则返回None
+    """
+    try:
+        # 检查设备是否存在
+        device = Device.query.get(device_id)
+        if not device:
+            logger.warning(f"设备 {device_id} 不存在，无法创建推流转发任务")
+            return None
+        
+        # 查询该摄像头是否已经存在于任何推流转发任务中
+        existing_tasks = StreamForwardTask.query.filter(
+            StreamForwardTask.devices.any(Device.id == device_id)
+        ).all()
+        
+        # 如果已经存在任务，直接返回第一个任务
+        if existing_tasks:
+            logger.info(f"设备 {device_id} 已存在于推流转发任务中，任务ID: {existing_tasks[0].id}")
+            return existing_tasks[0]
+        
+        # 注意：不再检查设备冲突，因为推流转发任务使用rtmp_stream，算法任务使用ai_rtmp，它们使用不同的流地址，可以同时使用
+        
+        # 创建新的推流转发任务
+        task_name = f"{device.name or device_id}-推流转发"
+        task = create_stream_forward_task(
+            task_name=task_name,
+            device_ids=[device_id],
+            output_format='rtmp',
+            output_quality='high',
+            description=f"为设备 {device.name or device_id} 自动创建的推流转发任务",
+            is_enabled=False  # 先创建，稍后启动
+        )
+        
+        # 启动任务
+        try:
+            start_stream_forward_task(task.id)
+            logger.info(f"为设备 {device_id} 自动创建并启动推流转发任务成功，任务ID: {task.id}")
+        except Exception as e:
+            logger.warning(f"为设备 {device_id} 自动创建推流转发任务成功，但启动失败: {str(e)}")
+            # 即使启动失败，也返回任务对象
+        
+        return task
+        
+    except Exception as e:
+        logger.error(f"为设备 {device_id} 确保推流转发任务失败: {str(e)}", exc_info=True)
+        return None
+

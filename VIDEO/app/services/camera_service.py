@@ -807,6 +807,13 @@ def register_camera(register_info: dict) -> str:
             except Exception as e:
                 logger.warning(f'为设备 {id} 创建抓拍空间失败: {str(e)}，但不影响设备注册')
             
+            # 自动检查并创建推流转发任务
+            try:
+                from app.services.stream_forward_service import ensure_device_stream_forward_task
+                ensure_device_stream_forward_task(id)
+            except Exception as e:
+                logger.warning(f'为设备 {id} 自动创建推流转发任务失败: {str(e)}，但不影响设备注册')
+            
             return id
         except Exception as e:
             db.session.rollback()
@@ -894,6 +901,13 @@ def register_camera(register_info: dict) -> str:
             logger.info(f'设备 {id} 的监控录像空间已自动创建')
         except Exception as e:
             logger.warning(f'为设备 {id} 创建监控录像空间失败: {str(e)}，但不影响设备注册')
+        
+        # 自动检查并创建推流转发任务
+        try:
+            from app.services.stream_forward_service import ensure_device_stream_forward_task
+            ensure_device_stream_forward_task(id)
+        except Exception as e:
+            logger.warning(f'为设备 {id} 自动创建推流转发任务失败: {str(e)}，但不影响设备注册')
         
         return id
     except Exception as e:

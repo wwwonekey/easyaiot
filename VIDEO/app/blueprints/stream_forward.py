@@ -13,7 +13,7 @@ from models import db, StreamForwardTask, Device
 from app.services.stream_forward_service import (
     create_stream_forward_task, update_stream_forward_task, delete_stream_forward_task,
     get_stream_forward_task, list_stream_forward_tasks, start_stream_forward_task,
-    stop_stream_forward_task, restart_stream_forward_task
+    stop_stream_forward_task, restart_stream_forward_task, ensure_device_stream_forward_task
 )
 
 stream_forward_bp = Blueprint('stream_forward', __name__)
@@ -503,4 +503,39 @@ def get_service_logs(service_obj, lines: int = 100, date: str = None):
             'code': 500,
             'msg': f'服务器内部错误: {str(e)}'
         }), 500
+
+
+# ====================== 设备推流转发任务检查接口 ======================
+@stream_forward_bp.route('/device/<string:device_id>/ensure-task', methods=['POST'])
+def ensure_device_task(device_id):
+    """检查并确保摄像头存在推流转发任务，如果不存在则自动创建并启动"""
+    try:
+        # 检查设备是否存在
+        device = Device.query.get(device_id)
+        if not device:
+            return jsonify({'code': 400, 'msg': f'设备 {device_id} 不存在'}), 400
+        
+        # 调用服务函数确保推流转发任务存在
+        task = ensure_device_stream_forward_task(device_id)
+        
+        if task:
+            return jsonify({
+                'code': 0,
+                'msg': '推流转发任务已确保存在',
+                'data': {
+                    'task_id': task.id,
+                    'task_name': task.task_name,
+                    'task_code': task.task_code,
+                    'is_enabled': task.is_enabled
+                }
+            })
+        else:
+            return jsonify({
+                'code': 500,
+                'msg': '创建推流转发任务失败',
+                'data': None
+            }), 500
+    except Exception as e:
+        logger.error(f"确保设备推流转发任务失败: {str(e)}", exc_info=True)
+        return jsonify({'code': 500, 'msg': f'服务器内部错误: {str(e)}'}), 500
 
