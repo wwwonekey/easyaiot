@@ -21,7 +21,8 @@ import numpy as np
 import requests
 import json
 import socket
-from datetime import datetime
+from datetime import datetime, timezone
+import pytz
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
@@ -100,6 +101,9 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 logger = logging.getLogger(__name__)
+
+# 时区设置（使用Asia/Shanghai，与Java端保持一致）
+BEIJING_TZ = pytz.timezone('Asia/Shanghai')
 
 # 全局变量
 TASK_ID = int(os.getenv('TASK_ID', '0'))
@@ -2061,7 +2065,7 @@ def buffer_streamer_worker(device_id: str):
                                     'confidence': det.get('confidence', 0),
                                     'bbox': det.get('bbox', []),
                                     'first_seen_time': datetime.fromtimestamp(
-                                        det.get('first_seen_time', current_timestamp)).isoformat() if det.get(
+                                        det.get('first_seen_time', current_timestamp), tz=BEIJING_TZ).isoformat() if det.get(
                                         'first_seen_time') else None,
                                     'duration': det.get('duration', 0)
                                 })
@@ -2087,7 +2091,7 @@ def buffer_streamer_worker(device_id: str):
                                 'event': algorithm_name,  # 使用算法名称作为事件类型
                                 'device_id': device_id,
                                 'device_name': device_name,
-                                'time': datetime.fromtimestamp(current_timestamp).strftime('%Y-%m-%d %H:%M:%S'),
+                                'time': datetime.fromtimestamp(current_timestamp, tz=BEIJING_TZ).strftime('%Y-%m-%d %H:%M:%S'),
                                 'information': json.dumps({
                                     'total_count': len(detections),  # 总目标数量
                                     'object_counts': object_counts,  # 各类型目标数量统计
