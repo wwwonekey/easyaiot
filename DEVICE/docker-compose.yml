@@ -312,6 +312,9 @@ services:
       # - SW_AGENT_COLLECTOR_BACKEND_SERVICES=[YOUR_SKYWALKING_ADDR]
     volumes:
       - ${HOME}/docker/iot-device/logs:/root/logs/
+      # 告警图片目录（与VIDEO服务共享，用于读取Python服务保存的告警图片并上传到MinIO）
+      # 注意：使用相对路径，从DEVICE目录指向VIDEO目录下的alert_images
+      - ../VIDEO/alert_images:/app/alert_images
       # - /data/skywalking/skywalking-agent:/data/skywalking/skywalking-agent
     # 配置hosts映射，将kafka-server映射到宿主机IP
     # 使用host-gateway自动解析为宿主机IP（Docker 20.10+支持）
