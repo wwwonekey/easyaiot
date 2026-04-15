@@ -443,10 +443,15 @@ services:
     command: jobmanager
     environment:
       TZ: Asia/Shanghai
+      EASYAIOT_KAFKA_BROKERS: Kafka:9092
+      EASYAIOT_DORIS_FENODES: fe:8030
+      EASYAIOT_DORIS_USER: root
+      EASYAIOT_DORIS_PASSWORD: ""
       FLINK_PROPERTIES: |-
         jobmanager.rpc.address: FlinkJobManager
     volumes:
       - "./flink_data/jm:/opt/flink/data:rw"
+      - "../flink:/opt/flink/sql:rw"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8081/ >/dev/null || exit 1"]
       interval: 30s
@@ -466,11 +471,16 @@ services:
     command: taskmanager
     environment:
       TZ: Asia/Shanghai
+      EASYAIOT_KAFKA_BROKERS: Kafka:9092
+      EASYAIOT_DORIS_FENODES: fe:8030
+      EASYAIOT_DORIS_USER: root
+      EASYAIOT_DORIS_PASSWORD: ""
       FLINK_PROPERTIES: |-
         jobmanager.rpc.address: FlinkJobManager
         taskmanager.numberOfTaskSlots: 4
     volumes:
       - "./flink_data/tm:/opt/flink/data:rw"
+      - "../flink:/opt/flink/sql:rw"
     healthcheck:
       test:
         [
