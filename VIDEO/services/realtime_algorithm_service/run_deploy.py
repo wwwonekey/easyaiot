@@ -758,6 +758,79 @@ def send_alert_event_async(alert_data: Dict):
     thread.start()
 
 
+def try_send_alert_for_detections(
+    device_id: str,
+    device_name: str,
+    frame_number: int,
+    detections: list,
+    frame_for_image: np.ndarray,
+    current_timestamp: float,
+    *,
+    log_suffix: str = "",
+) -> None:
+    """在具备真实检测结果时按抑制策略发送告警（用于输出帧或检测迟达补发）。"""
+    if not detections or not task_config or not task_config.alert_event_enabled:
+        return
+    current_time = time.time()
+    with alert_time_lock:
+        last_time = last_alert_time.get(device_id, 0)
+        time_since_last_alert = current_time - last_time
+        if time_since_last_alert < alert_suppression_interval:
+            logger.info(
+                f"⏸️  设备 {device_id} 告警抑制{log_suffix}：距离上次推送仅 {time_since_last_alert:.2f} 秒，跳过（需间隔 {alert_suppression_interval} 秒），帧 {frame_number}，{len(detections)} 个目标"
+            )
+            return
+        last_alert_time[device_id] = current_time
+        logger.info(
+            f"🔔 设备 {device_id} 准备发送告警{log_suffix}：帧 {frame_number}，{len(detections)} 个目标，距上次告警 {time_since_last_alert:.2f} 秒"
+        )
+    try:
+        object_counts = {}
+        all_detections_info = []
+        for det in detections:
+            class_name = det.get('class_name', 'unknown')
+            object_counts[class_name] = object_counts.get(class_name, 0) + 1
+            all_detections_info.append({
+                'track_id': det.get('track_id', 0),
+                'class_name': class_name,
+                'confidence': det.get('confidence', 0),
+                'bbox': det.get('bbox', []),
+                'first_seen_time': datetime.fromtimestamp(
+                    det.get('first_seen_time', current_timestamp), tz=BEIJING_TZ).isoformat() if det.get(
+                    'first_seen_time') else None,
+                'duration': det.get('duration', 0)
+            })
+        primary_object = max(object_counts.items(), key=lambda x: x[1])[0] if object_counts else 'unknown'
+        image_path = save_alert_image(
+            frame_for_image,
+            device_id,
+            frame_number,
+            detections[0] if detections else {}
+        )
+        algorithm_name = task_config.task_name if task_config and hasattr(task_config, 'task_name') else 'detection'
+        alert_data = {
+            'object': primary_object,
+            'event': algorithm_name,
+            'device_id': device_id,
+            'device_name': device_name,
+            'face_detection_enabled': bool(getattr(task_config, 'face_detection_enabled', False)),
+            'plate_detection_enabled': bool(getattr(task_config, 'plate_detection_enabled', False)),
+            'time': datetime.fromtimestamp(current_timestamp, tz=BEIJING_TZ).strftime('%Y-%m-%d %H:%M:%S'),
+            'information': json.dumps({
+                'total_count': len(detections),
+                'object_counts': object_counts,
+                'detections': all_detections_info,
+                'frame_number': frame_number,
+            }),
+            'image_path': image_path if image_path else None,
+        }
+        send_alert_event_async(alert_data)
+        extra = f" {log_suffix}" if log_suffix else ""
+        logger.info(f"📨 已发送告警事件{extra}：帧 {frame_number}，{len(detections)} 个目标（{object_counts}）")
+    except Exception as e:
+        logger.error(f"发送告警失败{log_suffix}: {str(e)}", exc_info=True)
+
+
 def cleanup_alert_images(alert_image_dir: str, max_images: int = 300, keep_ratio: float = 0.1):
     """清理告警图片目录，当图片数量超过限制时，删除最旧的图片
 
@@ -2033,6 +2106,18 @@ def buffer_streamer_worker(device_id: str):
                                 # 帧已经被输出过了，这是正常的清理（不记录警告）
                                 if frame_number % 50 == 0:
                                     logger.debug(f"设备 {device_id} 帧 {frame_number} 不在缓冲区中（已输出，正常清理）")
+                                # 低延迟模式：缓流器可能已用追踪缓存先行输出并 pop 该帧，YOLO 结果晚到；
+                                # 此时缓冲区已无该帧，必须在合并失败分支补发告警，否则会永远不发告警。
+                                if detections:
+                                    try_send_alert_for_detections(
+                                        device_id,
+                                        device_name,
+                                        frame_number,
+                                        detections,
+                                        processed_frame,
+                                        push_data.get('timestamp', time.time()),
+                                        log_suffix="（检测迟达，补发）",
+                                    )
                             else:
                                 # 帧号大于等于当前输出帧号，但不在缓冲区中，可能是被过早清理了
                                 # 这种情况不应该发生，记录警告
@@ -2132,98 +2217,23 @@ def buffer_streamer_worker(device_id: str):
                             f"✅ 设备 {device_id} 帧 {next_output_frame} 使用已处理的帧（{len(detections)}个检测目标）")
 
                 # 如果帧已处理，检查是否有新的检测结果需要发送告警
+                # 注意：仅当 frame_data 中带有真实 detections 时才发告警；若仅因追踪缓存把 is_processed 置为 True
+                # 而 detections 仍为空，则由「推帧合并」分支的迟达补发逻辑负责。
                 if is_processed:
                     detections = frame_data.get('detections', [])
-                    should_send_alert = False  # 初始化为False
                     if detections and task_config and task_config.alert_event_enabled:
-                        # 告警抑制：使用锁保护时间戳的访问和更新，确保线程安全
-                        current_time = time.time()
-                        with alert_time_lock:
-                            last_time = last_alert_time.get(device_id, 0)
-                            time_since_last_alert = current_time - last_time
-
-                            # 如果距离上次推送已经超过5秒，才发送告警
-                            if time_since_last_alert >= alert_suppression_interval:
-                                # 立即更新上次告警时间（在发送告警之前），防止同一秒内多次推送
-                                last_alert_time[device_id] = current_time
-                                should_send_alert = True
-                                logger.info(
-                                    f"🔔 设备 {device_id} 准备发送告警：检测到 {len(detections)} 个目标，距离上次告警 {time_since_last_alert:.2f} 秒")
-                            else:
-                                # 不到5秒，跳过告警推送
-                                should_send_alert = False
-                                logger.info(
-                                    f"⏸️  设备 {device_id} 告警抑制：距离上次推送仅 {time_since_last_alert:.2f} 秒，跳过告警推送（需要间隔5秒），检测到 {len(detections)} 个目标")
+                        try_send_alert_for_detections(
+                            device_id,
+                            device_name,
+                            next_output_frame,
+                            detections,
+                            output_frame,
+                            current_timestamp,
+                        )
                     elif detections and (not task_config or not task_config.alert_event_enabled):
-                        # 有检测结果但告警未启用
-                        if next_output_frame % 100 == 0:  # 每100帧记录一次，避免日志过多
+                        if next_output_frame % 100 == 0:
                             logger.debug(
                                 f"设备 {device_id} 检测到 {len(detections)} 个目标，但告警事件未启用（alert_event_enabled={task_config.alert_event_enabled if task_config else None}）")
-
-                    # 在锁外发送告警，避免长时间持有锁
-                    if should_send_alert:
-                        # 只发送一次告警，包含所有检测到的目标信息
-                        try:
-                            # 统计检测到的目标类型和数量
-                            object_counts = {}
-                            all_detections_info = []
-                            for det in detections:
-                                class_name = det.get('class_name', 'unknown')
-                                object_counts[class_name] = object_counts.get(class_name, 0) + 1
-                                all_detections_info.append({
-                                    'track_id': det.get('track_id', 0),
-                                    'class_name': class_name,
-                                    'confidence': det.get('confidence', 0),
-                                    'bbox': det.get('bbox', []),
-                                    'first_seen_time': datetime.fromtimestamp(
-                                        det.get('first_seen_time', current_timestamp), tz=BEIJING_TZ).isoformat() if det.get(
-                                        'first_seen_time') else None,
-                                    'duration': det.get('duration', 0)
-                                })
-                            
-                            # 选择数量最多的目标类型作为主要对象（如果有多个类型，选择第一个）
-                            primary_object = max(object_counts.items(), key=lambda x: x[1])[0] if object_counts else 'unknown'
-                            
-                            # 保存告警图片到本地（使用第一个检测结果作为代表）
-                            image_path = save_alert_image(
-                                output_frame,
-                                device_id,
-                                next_output_frame,
-                                detections[0] if detections else {}
-                            )
-
-                            # 构建告警数据（参照告警表字段）
-                            # 获取算法名称（任务名称）
-                            algorithm_name = task_config.task_name if task_config and hasattr(task_config,
-                                                                                                  'task_name') else 'detection'
-
-                            alert_data = {
-                                'object': primary_object,  # 主要对象类型
-                                'event': algorithm_name,  # 使用算法名称作为事件类型
-                                'device_id': device_id,
-                                'device_name': device_name,
-                                'face_detection_enabled': bool(
-                                    getattr(task_config, 'face_detection_enabled', False)
-                                ),
-                                'plate_detection_enabled': bool(
-                                    getattr(task_config, 'plate_detection_enabled', False)
-                                ),
-                                'time': datetime.fromtimestamp(current_timestamp, tz=BEIJING_TZ).strftime('%Y-%m-%d %H:%M:%S'),
-                                'information': json.dumps({
-                                    'total_count': len(detections),  # 总目标数量
-                                    'object_counts': object_counts,  # 各类型目标数量统计
-                                    'detections': all_detections_info,  # 所有检测目标的详细信息
-                                    'frame_number': next_output_frame,
-                                }),
-                                # 不直接传输图片，而是传输图片所在磁盘路径
-                                'image_path': image_path if image_path else None,
-                            }
-
-                            # 异步发送告警事件（只发送一次）
-                            send_alert_event_async(alert_data)
-                            logger.info(f"📨 已发送告警事件：检测到 {len(detections)} 个目标（{object_counts}）")
-                        except Exception as e:
-                            logger.error(f"发送告警失败: {str(e)}", exc_info=True)
 
                 # 推送到RTMP流
                 if pusher_process and pusher_process.poll() is None and rtmp_url:

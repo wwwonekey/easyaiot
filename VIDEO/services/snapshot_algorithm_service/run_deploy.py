@@ -1361,8 +1361,53 @@ def buffer_streamer_worker(device_id: str):
                         frame_data = frame_buffer[fn]
                     pending_frames.discard(fn)
 
-                # 帧可能已超时清理，直接跳过
+                # 帧可能已超时清理；若仍有检测结果，仍需发告警（否则检测完成即丢事件）
                 if not frame_data:
+                    if detections and task_config and task_config.alert_event_enabled:
+                        frame_ts = push_data.get('timestamp', time.time())
+                        logger.info(
+                            f"🚨 设备 {device_id} 抽帧帧 {fn}（缓冲区已释放）补发告警：检测到 {len(detections)} 个目标"
+                        )
+                        for det in detections:
+                            try:
+                                image_path = save_alert_image(
+                                    processed_frame,
+                                    device_id,
+                                    fn,
+                                    det
+                                )
+                                algorithm_name = task_config.task_name if task_config and hasattr(
+                                    task_config, 'task_name') else 'detection'
+                                alert_data = {
+                                    'object': det.get('class_name', 'unknown'),
+                                    'event': algorithm_name,
+                                    'device_id': device_id,
+                                    'device_name': device_name,
+                                    'face_detection_enabled': bool(
+                                        getattr(task_config, 'face_detection_enabled', False)
+                                    ),
+                                    'plate_detection_enabled': bool(
+                                        getattr(task_config, 'plate_detection_enabled', False)
+                                    ),
+                                    'time': datetime.fromtimestamp(frame_ts).strftime('%Y-%m-%d %H:%M:%S'),
+                                    'information': json.dumps({
+                                        'track_id': det.get('track_id', 0),
+                                        'confidence': det.get('confidence', 0),
+                                        'bbox': det.get('bbox', []),
+                                        'frame_number': fn,
+                                        'first_seen_time': datetime.fromtimestamp(
+                                            det.get('first_seen_time', frame_ts)
+                                        ).isoformat() if det.get('first_seen_time') else None,
+                                        'duration': det.get('duration', 0)
+                                    }),
+                                    'image_path': image_path if image_path else None,
+                                }
+                                logger.info(
+                                    f"📤 设备 {device_id} 抽帧帧 {fn}（补发）异步发送告警: object={alert_data['object']}"
+                                )
+                                send_alert_event_async(alert_data)
+                            except Exception as e:
+                                logger.error(f"发送告警失败: {str(e)}", exc_info=True)
                     processed_count += 1
                     continue
 
