@@ -174,9 +174,13 @@ load_dotenv()
 
 # OpenCV FFmpeg 解码参数（用于降低延迟并尽量忽略/丢弃损坏包）
 # 抓拍任务也会受上游流抖动影响，设置默认捕获选项可减少解码花屏/撕裂。
+# RTSP 传输：与海康「UDP/TCP」一致；默认 udp（需 tcp 时设 OPENCV_FFMPEG_RTSP_TRANSPORT=tcp 或 FFMPEG_RTSP_TRANSPORT=tcp）
 if not os.getenv("OPENCV_FFMPEG_CAPTURE_OPTIONS"):
+    _rtsp_tr = (os.getenv("OPENCV_FFMPEG_RTSP_TRANSPORT") or os.getenv("FFMPEG_RTSP_TRANSPORT") or "udp").strip().lower()
+    if _rtsp_tr not in ("tcp", "udp"):
+        _rtsp_tr = "udp"
     os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
-        "rtsp_transport;tcp"
+        f"rtsp_transport;{_rtsp_tr}"
         "|stimeout;10000000"
         "|rw_timeout;5000000"
         "|max_delay;500000"

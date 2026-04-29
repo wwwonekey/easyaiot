@@ -206,9 +206,13 @@ load_dotenv()
 # OpenCV FFmpeg 解码参数（用于降低延迟并尽量忽略/丢弃损坏包）
 # 说明：当上游流发生抖动/重连/丢包时，FFmpeg 解码常出现 "error while decoding MB..."；
 # 该配置倾向于“丢弃损坏数据继续跑”，避免花屏/撕裂持续时间过长。
+# RTSP 传输：默认 udp；需 tcp 时设 OPENCV_FFMPEG_RTSP_TRANSPORT=tcp 或 FFMPEG_RTSP_TRANSPORT=tcp
 if not os.getenv("OPENCV_FFMPEG_CAPTURE_OPTIONS"):
+    _rtsp_tr = (os.getenv("OPENCV_FFMPEG_RTSP_TRANSPORT") or os.getenv("FFMPEG_RTSP_TRANSPORT") or "udp").strip().lower()
+    if _rtsp_tr not in ("tcp", "udp"):
+        _rtsp_tr = "udp"
     os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
-        "rtsp_transport;tcp"
+        f"rtsp_transport;{_rtsp_tr}"
         "|stimeout;10000000"
         "|rw_timeout;5000000"
         "|max_delay;500000"

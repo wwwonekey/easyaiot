@@ -68,6 +68,22 @@ def get_flask_app():
 # 加载环境变量
 load_dotenv()
 
+# OpenCV 经 FFmpeg 拉 RTSP 时的默认选项（与抓拍/实时算法服务对齐）
+# 默认 udp，与海康子码流常见配置一致；需 TCP 时设 OPENCV_FFMPEG_RTSP_TRANSPORT=tcp 或 FFMPEG_RTSP_TRANSPORT=tcp
+if not os.getenv("OPENCV_FFMPEG_CAPTURE_OPTIONS"):
+    _rtsp_tr = (os.getenv("OPENCV_FFMPEG_RTSP_TRANSPORT") or os.getenv("FFMPEG_RTSP_TRANSPORT") or "udp").strip().lower()
+    if _rtsp_tr not in ("tcp", "udp"):
+        _rtsp_tr = "udp"
+    os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
+        f"rtsp_transport;{_rtsp_tr}"
+        "|stimeout;10000000"
+        "|rw_timeout;5000000"
+        "|max_delay;500000"
+        "|fflags;nobuffer+discardcorrupt+genpts"
+        "|flags;low_delay"
+        "|err_detect;ignore_err"
+    )
+
 # GPU调度（按设备稳定映射到多张GPU，避免全部压到0号卡）
 def _parse_gpu_id_list(value: str) -> List[int]:
     if not value:

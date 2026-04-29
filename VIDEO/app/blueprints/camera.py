@@ -21,7 +21,7 @@ import requests
 from flask import Blueprint, current_app, request, jsonify
 from minio import Minio
 from minio.error import S3Error
-from urllib.parse import quote
+from urllib.parse import quote, urlparse, parse_qs, urlencode, urlunparse
 
 from app.services.camera_service import *
 from app.services.camera_service import (
@@ -35,6 +35,31 @@ from sqlalchemy import and_
 
 camera_bp = Blueprint('camera', __name__)
 logger = logging.getLogger(__name__)
+
+
+def _strip_rtsp_transport_query(source_url: str) -> tuple[str, Optional[str]]:
+    """
+    从 RTSP URL 查询参数中读取传输方式并剔除该参数，避免将自定义参数传给 NVR/摄像头。
+    支持: easyaiot_rtsp_transport / rtsp_transport / iot_rtsp_transport = tcp|udp
+    """
+    try:
+        p = urlparse(source_url)
+        if p.scheme.lower() != 'rtsp' or not p.query:
+            return source_url, None
+        q = parse_qs(p.query, keep_blank_values=True)
+        transport = None
+        for key in ("easyaiot_rtsp_transport", "rtsp_transport", "iot_rtsp_transport"):
+            if key in q and q[key]:
+                transport = (q[key][0] or "").strip().lower()
+                del q[key]
+                break
+        if transport is None:
+            return source_url, None
+        new_query = urlencode(q, doseq=True)
+        return urlunparse(p._replace(query=new_query)), transport
+    except Exception:
+        return source_url, None
+
 
 # 全局变量管理截图任务状态
 rtsp_tasks = {}
@@ -115,21 +140,45 @@ class FFmpegDaemon:
                 rtsp_open_timeout_us = _env_int("FFMPEG_RTSP_OPEN_TIMEOUT_US", 10_000_000)  # 10s
                 rtsp_io_timeout_us = _env_int("FFMPEG_RTSP_IO_TIMEOUT_US", 5_000_000)  # 5s
 
+                input_url, url_rtsp_transport = _strip_rtsp_transport_query(device.source or "")
+                # 海康等「传输协议 UDP」子码流：需与设备一致；默认可用环境变量或 URL 查询参数覆盖
+                rtsp_transport = (url_rtsp_transport or _env_str(
+                    "FFMPEG_RTSP_TRANSPORT",
+                    _env_str("VIEW_FFMPEG_RTSP_TRANSPORT", "udp"),
+                )).lower()
+                if rtsp_transport not in ("tcp", "udp"):
+                    rtsp_transport = "udp"
+
+                is_rtsp_input = (input_url or "").strip().lower().startswith("rtsp://")
+
                 ffmpeg_cmd = [
                     "ffmpeg",
                     "-hide_banner",
                     "-loglevel",
                     "warning",
+                ]
 
-                    # 输入：RTSP（TCP更稳），超时避免卡死
-                    "-rtsp_transport",
-                    "tcp",
-                    "-rtsp_flags",
-                    "prefer_tcp",
-                    "-stimeout",
-                    str(rtsp_open_timeout_us),
-                    "-rw_timeout",
-                    str(rtsp_io_timeout_us),
+                # 输入：RTSP 传输方式（默认 UDP，与海康子码流常见配置一致；需 TCP 时设 FFMPEG_RTSP_TRANSPORT=tcp）
+                if is_rtsp_input:
+                    ffmpeg_cmd.extend([
+                        "-rtsp_transport",
+                        rtsp_transport,
+                    ])
+                    if rtsp_transport == "tcp":
+                        ffmpeg_cmd.extend(["-rtsp_flags", "prefer_tcp"])
+                    ffmpeg_cmd.extend([
+                        "-stimeout",
+                        str(rtsp_open_timeout_us),
+                        "-rw_timeout",
+                        str(rtsp_io_timeout_us),
+                    ])
+                else:
+                    ffmpeg_cmd.extend([
+                        "-rw_timeout",
+                        str(rtsp_io_timeout_us),
+                    ])
+
+                ffmpeg_cmd.extend([
                     "-fflags",
                     # 丢弃损坏包并生成时间戳：可减少“半边白/马赛克”持续时间（以连续性换取画面完整性）
                     "nobuffer+discardcorrupt+genpts",
@@ -139,7 +188,7 @@ class FFmpegDaemon:
                     "-flags",
                     "low_delay",
                     "-i",
-                    device.source,
+                    input_url,
 
                     # 输出：仅视频
                     "-an",
@@ -151,7 +200,7 @@ class FFmpegDaemon:
                     preset,
                     "-tune",
                     "zerolatency",
-                ]
+                ])
 
                 # 优先使用 CRF（恒定质量）；否则使用 ABR/CBR（码率）
                 if crf:
