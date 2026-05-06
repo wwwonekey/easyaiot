@@ -16,7 +16,7 @@
           :model="validateInfos"
           :wrapperCol="{ span: 16 }"
           :disabled="state.isView"
-          v-else-if="state.type === 'source' && !state.isEdit && !state.isView"
+          v-if="state.type === 'source' && !state.isEdit && !state.isView"
         >
           <FormItem label="摄像头类型" name="cameraType" v-bind=validateInfos.cameraType>
             <Select
