@@ -6,6 +6,7 @@ import com.basiclab.iot.device.domain.device.vo.DeviceServiceInvokeResponse;
 import com.basiclab.iot.device.service.device.DeviceService;
 import com.basiclab.iot.device.service.device.DeviceServiceInvokeResponseService;
 import com.basiclab.iot.sink.mq.message.IotDeviceMessage;
+import com.basiclab.iot.sink.util.IotDeviceMessageUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -56,8 +57,9 @@ public class ServiceInvokeResponseHandler {
 
             // 3. 如果deviceIdentification为空，尝试从设备服务中获取
             if (StrUtil.isBlank(deviceIdentification) && message.getDeviceId() != null) {
-                com.basiclab.iot.device.domain.device.vo.Device device = 
-                        deviceService.findOneById(message.getDeviceId());
+                Long numericId = IotDeviceMessageUtils.parseLongDeviceIdOrNull(message.getDeviceId());
+                com.basiclab.iot.device.domain.device.vo.Device device =
+                        numericId != null ? deviceService.findOneById(numericId) : null;
                 if (device != null) {
                     deviceIdentification = device.getDeviceIdentification();
                     if (StrUtil.isBlank(productIdentification)) {
@@ -69,7 +71,7 @@ public class ServiceInvokeResponseHandler {
             // 4. 构建响应实体
             DeviceServiceInvokeResponse response = DeviceServiceInvokeResponse.builder()
                     .messageId(message.getId())
-                    .deviceId(message.getDeviceId())
+                    .deviceId(IotDeviceMessageUtils.parseLongDeviceIdOrNull(message.getDeviceId()))
                     .deviceIdentification(deviceIdentification)
                     .productIdentification(productIdentification)
                     .serviceIdentifier(serviceIdentifier)

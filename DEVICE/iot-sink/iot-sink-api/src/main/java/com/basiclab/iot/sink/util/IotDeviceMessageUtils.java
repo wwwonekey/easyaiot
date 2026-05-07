@@ -20,6 +20,20 @@ import java.util.Map;
 
 public class IotDeviceMessageUtils {
 
+    /**
+     * 纯数字 deviceId 转为 Long（MQTT/TCP 连接表等仍以 Long 为键）；GB28181 等复合 ID 返回 null。
+     */
+    public static Long parseLongDeviceIdOrNull(String deviceId) {
+        if (StrUtil.isBlank(deviceId)) {
+            return null;
+        }
+        try {
+            return Long.parseLong(deviceId.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
     // ========== Message 相关 ==========
 
     public static String generateMessageId() {

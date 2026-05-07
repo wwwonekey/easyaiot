@@ -294,7 +294,7 @@ public class DeviceCommandServiceImpl implements DeviceCommandService {
             // 注意：IotDeviceMessage 的 params 字段类型是 Object，可以直接传入 JSON 字符串解析后的对象
             Object params = JSONUtil.parse(messageContent);
             IotDeviceMessage deviceMessage = IotDeviceMessage.builder()
-                    .deviceId(deviceResultVO.getId())
+                    .deviceId(String.valueOf(deviceResultVO.getId()))
                     .topic(ConsumerTopicConstant.Mqtt.IOT_MQS_MQTT_MSG)
                     .params(params)
                     .build();
@@ -376,7 +376,7 @@ public class DeviceCommandServiceImpl implements DeviceCommandService {
             // 构建 IotDeviceMessage
             Object params = JSONUtil.parse(message);
             IotDeviceMessage deviceMessage = IotDeviceMessage.builder()
-                    .deviceId(device.getId())
+                    .deviceId(String.valueOf(device.getId()))
                     .topic(topic)
                     .params(params)
                     .build();
@@ -445,7 +445,7 @@ public class DeviceCommandServiceImpl implements DeviceCommandService {
             // 构建 IotDeviceMessage
             Object params = JSONUtil.parse(publishMessageRequestParam.getPayload());
             IotDeviceMessage deviceMessage = IotDeviceMessage.builder()
-                    .deviceId(device.getId())
+                    .deviceId(String.valueOf(device.getId()))
                     .topic(publishMessageRequestParam.getTopic())
                     .params(params)
                     .build();

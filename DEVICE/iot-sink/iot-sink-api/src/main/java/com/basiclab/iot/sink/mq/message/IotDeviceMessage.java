@@ -4,7 +4,9 @@ import cn.hutool.core.map.MapUtil;
 import com.basiclab.iot.common.exception.GlobalErrorStatus;
 import com.basiclab.iot.sink.enums.IotDeviceMessageMethodEnum;
 import com.basiclab.iot.sink.enums.IotDeviceStateEnum;
+import com.basiclab.iot.sink.jackson.IotDeviceIdDeserializer;
 import com.basiclab.iot.sink.util.IotDeviceMessageUtils;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -51,9 +53,10 @@ public class IotDeviceMessage {
     private LocalDateTime reportTime;
 
     /**
-     * 设备编号
+     * 设备编号（JSON 侧可为 Long 或字符串，如 GB28181 通道 ID）
      */
-    private Long deviceId;
+    @JsonDeserialize(using = IotDeviceIdDeserializer.class)
+    private String deviceId;
     /**
      * 租户编号
      */

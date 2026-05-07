@@ -4,10 +4,10 @@ import cn.hutool.core.util.StrUtil;
 import cn.hutool.extra.spring.SpringUtil;
 import com.basiclab.iot.sink.biz.dto.IotDeviceRespDTO;
 import com.basiclab.iot.sink.mq.message.IotDeviceMessage;
-import com.basiclab.iot.sink.util.IotDeviceMessageUtils;
 import com.basiclab.iot.sink.protocol.emqx.IotEmqxUpstreamProtocol;
 import com.basiclab.iot.sink.messagebus.publisher.IotDeviceService;
 import com.basiclab.iot.sink.messagebus.publisher.message.IotDeviceMessageService;
+import com.basiclab.iot.sink.util.IotDeviceMessageUtils;
 import com.basiclab.iot.sink.util.IotMqttTopicUtils;
 import lombok.extern.slf4j.Slf4j;
 
@@ -40,8 +40,14 @@ public class IotEmqxDownstreamHandler {
      * @param message 设备消息
      */
     public void handle(IotDeviceMessage message) {
+        Long numericDeviceId = IotDeviceMessageUtils.parseLongDeviceIdOrNull(message.getDeviceId());
+        if (numericDeviceId == null) {
+            log.warn("[handle][下行消息 deviceId 非数字主键，跳过 EMQX 下发: {}]", message.getDeviceId());
+            return;
+        }
+
         // 1. 获取设备信息
-        IotDeviceRespDTO deviceInfo = deviceService.getDeviceFromCache(message.getDeviceId());
+        IotDeviceRespDTO deviceInfo = deviceService.getDeviceFromCache(numericDeviceId);
         if (deviceInfo == null) {
             log.error("[handle][设备信息({})不存在]", message.getDeviceId());
             return;

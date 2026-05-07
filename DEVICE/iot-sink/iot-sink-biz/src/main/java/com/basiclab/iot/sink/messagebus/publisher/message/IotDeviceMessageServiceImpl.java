@@ -193,7 +193,7 @@ public class IotDeviceMessageServiceImpl implements IotDeviceMessageService {
         Assert.notNull(device, "设备不存在，productIdentification: {}, deviceIdentification: {}", productIdentification, deviceIdentification);
         
         // 2. 设置设备信息到消息中
-        message.setDeviceId(device.getId());
+        message.setDeviceId(String.valueOf(device.getId()));
         message.setTenantId(device.getTenantId());
         message.setServerId(serverId);
         

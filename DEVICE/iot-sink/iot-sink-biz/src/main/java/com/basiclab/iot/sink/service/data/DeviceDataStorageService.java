@@ -202,7 +202,7 @@ public class DeviceDataStorageService {
      * @param deviceId       设备ID
      * @return 子表名称
      */
-    private String buildTableName(String superTableName, Long deviceId) {
+    private String buildTableName(String superTableName, String deviceId) {
         return superTableName + "_" + deviceId;
     }
 

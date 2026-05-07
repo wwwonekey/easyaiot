@@ -71,6 +71,14 @@ public class IotSinkRedisKeyConstants {
         return DEVICE_DATA_KEY_PREFIX + deviceId;
     }
 
+    /** 字符串设备 ID（与 {@link #buildDeviceDataKey(Long)} 并列使用） */
+    public static String buildDeviceDataKey(String deviceId) {
+        if (deviceId == null || deviceId.isEmpty()) {
+            throw new IllegalArgumentException("设备 ID 不能为空");
+        }
+        return DEVICE_DATA_KEY_PREFIX + deviceId;
+    }
+
     /**
      * 构建设备 ServerId 映射的 Redis Key
      *

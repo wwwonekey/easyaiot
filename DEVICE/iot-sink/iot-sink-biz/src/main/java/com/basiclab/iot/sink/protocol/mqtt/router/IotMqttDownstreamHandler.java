@@ -44,14 +44,20 @@ public class IotMqttDownstreamHandler {
                 return false;
             }
 
+            Long numericDeviceId = IotDeviceMessageUtils.parseLongDeviceIdOrNull(message.getDeviceId());
+            if (numericDeviceId == null) {
+                log.warn("[handleDownstreamMessage][deviceId 非数字主键，跳过 MQTT 下发：{}]", message.getDeviceId());
+                return false;
+            }
+
             // 2. 检查设备是否在线
-            if (connectionManager.isDeviceOffline(message.getDeviceId())) {
+            if (connectionManager.isDeviceOffline(numericDeviceId)) {
                 log.warn("[handleDownstreamMessage][设备离线，无法发送消息，设备 ID：{}]", message.getDeviceId());
                 return false;
             }
 
             // 3. 获取连接信息
-            IotMqttConnectionManager.ConnectionInfo connectionInfo = connectionManager.getConnectionInfoByDeviceId(message.getDeviceId());
+            IotMqttConnectionManager.ConnectionInfo connectionInfo = connectionManager.getConnectionInfoByDeviceId(numericDeviceId);
             if (connectionInfo == null) {
                 log.warn("[handleDownstreamMessage][连接信息不存在，设备 ID：{}]", message.getDeviceId());
                 return false;
@@ -66,7 +72,7 @@ public class IotMqttDownstreamHandler {
             }
 
             // 5. 发送消息到设备
-            return sendMessageToDevice(message, connectionInfo, payload);
+            return sendMessageToDevice(message, numericDeviceId, connectionInfo, payload);
         } catch (Exception e) {
             if (message != null) {
                 log.error("[handleDownstreamMessage][处理下行消息异常，设备 ID：{}，错误：{}]",
@@ -85,6 +91,7 @@ public class IotMqttDownstreamHandler {
      * @return 是否发送成功
      */
     private boolean sendMessageToDevice(IotDeviceMessage message,
+                                        Long numericDeviceId,
                                         IotMqttConnectionManager.ConnectionInfo connectionInfo,
                                         byte[] payload) {
         // 1. 构建主题
@@ -96,7 +103,7 @@ public class IotMqttDownstreamHandler {
         }
 
         // 2. 发送消息
-        boolean success = connectionManager.sendToDevice(message.getDeviceId(), topic, payload, MqttQoS.AT_LEAST_ONCE.value(), false);
+        boolean success = connectionManager.sendToDevice(numericDeviceId, topic, payload, MqttQoS.AT_LEAST_ONCE.value(), false);
         if (success) {
             log.debug("[sendMessageToDevice][消息发送成功，设备 ID：{}，主题：{}，方法：{}]",
                     message.getDeviceId(), topic, message.getMethod());

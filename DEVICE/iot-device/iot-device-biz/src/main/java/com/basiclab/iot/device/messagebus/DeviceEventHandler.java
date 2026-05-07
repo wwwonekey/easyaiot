@@ -6,6 +6,7 @@ import com.basiclab.iot.device.domain.device.vo.DeviceEvent;
 import com.basiclab.iot.device.service.device.DeviceEventService;
 import com.basiclab.iot.device.service.device.DeviceService;
 import com.basiclab.iot.sink.mq.message.IotDeviceMessage;
+import com.basiclab.iot.sink.util.IotDeviceMessageUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -58,8 +59,9 @@ public class DeviceEventHandler {
 
             // 3. 如果deviceIdentification为空，尝试从设备服务中获取
             if (StrUtil.isBlank(deviceIdentification) && message.getDeviceId() != null) {
+                Long numericId = IotDeviceMessageUtils.parseLongDeviceIdOrNull(message.getDeviceId());
                 com.basiclab.iot.device.domain.device.vo.Device device =
-                        deviceService.findOneById(message.getDeviceId());
+                        numericId != null ? deviceService.findOneById(numericId) : null;
                 if (device != null) {
                     deviceIdentification = device.getDeviceIdentification();
                     if (StrUtil.isBlank(productIdentification)) {

@@ -102,7 +102,7 @@ public class IotDownstreamMessageApiImpl implements IotDownstreamMessageApi {
         }
 
         // 设置设备 ID
-        message.setDeviceId(deviceId);
+        message.setDeviceId(String.valueOf(deviceId));
 
         // 数据下行前置处理：根据 Topic 标准映射验证并标准化 method 字段
         normalizeDownstreamMethodByTopic(message);

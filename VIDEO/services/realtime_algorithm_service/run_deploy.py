@@ -1054,6 +1054,8 @@ def try_send_alert_for_detections(
             'event': algorithm_name,
             'device_id': device_id,
             'device_name': device_name,
+            # GB28181/实时算法统一走 realtime，便于 hook 侧选择 Kafka 主题与任务查询（snap/snapshot 另有分支）
+            'task_type': 'realtime',
             'face_detection_enabled': bool(getattr(task_config, 'face_detection_enabled', False)),
             'plate_detection_enabled': bool(getattr(task_config, 'plate_detection_enabled', False)),
             'time': datetime.fromtimestamp(current_timestamp, tz=BEIJING_TZ).strftime('%Y-%m-%d %H:%M:%S'),

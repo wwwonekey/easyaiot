@@ -1066,7 +1066,7 @@ public class DeviceServiceImpl extends ServiceImpl<DeviceMapper, Device> impleme
 
             // 5. 构建 IotDeviceMessage
             IotDeviceMessage deviceMessage = IotDeviceMessage.builder()
-                    .deviceId(deviceId)
+                    .deviceId(String.valueOf(deviceId))
                     .tenantId(device.getTenantId())
                     .method(IotDeviceMessageMethodEnum.SERVICE_INVOKE.getMethod()) // thing.service.invoke
                     .topic(topic)
