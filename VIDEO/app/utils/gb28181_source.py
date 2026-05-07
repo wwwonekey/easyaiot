@@ -1,8 +1,11 @@
+import logging
 import os
 from typing import Iterable, Optional, Tuple
 from urllib.parse import urlparse
 
 import requests
+
+_logger = logging.getLogger(__name__)
 
 
 GB28181_SOURCE_PREFIX = 'gb28181://'
@@ -46,6 +49,20 @@ def _build_play_url(base_url: str, device_id: str, channel_id: str) -> str:
     return f'{base}/play/start/{device_id}/{channel_id}'
 
 
+def _body_suggests_hevc_rtmp(body: dict) -> bool:
+    """播放接口返回的 RTMP 地址若标明 HEVC/H.265，OpenCV 内置 FFmpeg 拉 RTMP(FLV) 常失败 (codec_id=0)。"""
+    if not isinstance(body, dict):
+        return False
+    for key in ('rtmp', 'rtmps'):
+        u = body.get(key)
+        if not isinstance(u, str) or not u.strip():
+            continue
+        lu = u.lower()
+        if 'h265' in lu or 'hevc' in lu:
+            return True
+    return False
+
+
 def _stream_url_candidates(body: dict) -> list:
     """
     按协议顺序返回候选播放地址。
@@ -58,6 +75,11 @@ def _stream_url_candidates(body: dict) -> list:
     会占用 RTMP 读者，可保持流存活。
 
     若环境仅通 RTSP 或拉 RTMP 失败，可设 GB28181_PLAY_PROTOCOL=rtsp_first 恢复旧顺序。
+
+    GB28181_HEVC_RTSP_FIRST（默认 1）：当播放接口返回的 RTMP 地址含 HEVC/H.265 线索时，
+    在仍为 rtmp_first 策略的前提下自动改为「先 RTSP」——用于规避 OpenCV VideoCapture 对
+    RTMP+HEVC 无法建解码器的问题。若因此出现 ZLM「无 RTMP 读者断流」，可调大
+    streamNoneReaderDelayMS，或设 GB28181_HEVC_RTSP_FIRST=0 并改用带 libx265 的 FFmpeg 构建 OpenCV。
     """
     flv_block = [
         body.get('flv'),
@@ -80,7 +102,23 @@ def _stream_url_candidates(body: dict) -> list:
             *flv_block,
             *other,
         ]
-    # 默认：rtmp_first
+    # 默认：rtmp_first；若接口标明 HEVC 的 RTMP，则对 OpenCV 侧优先 RTSP
+    hevc_rtsp_first = (os.getenv('GB28181_HEVC_RTSP_FIRST', '1').strip().lower() not in (
+        '0', 'false', 'no', 'off',
+    ))
+    if hevc_rtsp_first and _body_suggests_hevc_rtmp(body if isinstance(body, dict) else {}):
+        _logger.info(
+            'GB28181: 检测到 HEVC/H.265 的 RTMP 播放地址，已优先选用 RTSP（缓解 OpenCV RTMP codec_id=0）；'
+            '若需强制 RTMP 优先请设 GB28181_HEVC_RTSP_FIRST=0'
+        )
+        return [
+            body.get('rtsp'),
+            body.get('rtsps'),
+            body.get('rtmp'),
+            body.get('rtmps'),
+            *flv_block,
+            *other,
+        ]
     return [
         body.get('rtmp'),
         body.get('rtmps'),
