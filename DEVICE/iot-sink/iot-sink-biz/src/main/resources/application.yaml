@@ -269,6 +269,11 @@ iot:
     begin-code: 9999 # 这里配置 9999 的原因是，测试方便。
     end-code: 9999 # 这里配置 9999 的原因是，测试方便。
 
+# 告警图片路径解析（与算法容器 ALERT_IMAGES_DIR=/app/alert_images、docker 挂载对齐）
+alert:
+  images:
+    base-dir: /app
+
 debug: false
 
 --- #################### 日志配置 ####################

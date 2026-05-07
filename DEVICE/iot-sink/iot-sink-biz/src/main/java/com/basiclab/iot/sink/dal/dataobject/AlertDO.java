@@ -3,6 +3,7 @@ package com.basiclab.iot.sink.dal.dataobject;
 import lombok.Data;
 
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 
 /**
  * Alert实体类（对应VIDEO数据库中的alert表）
@@ -40,9 +41,9 @@ public class AlertDO {
     private String information;
 
     /**
-     * 告警时间
+     * 告警时间（与 Python 端一致：字符串为 Asia/Shanghai 墙钟；入库用带偏移避免 PG/MySQL 与时区组合产生 ±8h）
      */
-    private LocalDateTime time;
+    private OffsetDateTime time;
 
     /**
      * 设备ID

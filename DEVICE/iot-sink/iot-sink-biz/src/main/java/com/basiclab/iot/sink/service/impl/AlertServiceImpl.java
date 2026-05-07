@@ -12,6 +12,7 @@ import io.minio.errors.*;
 import io.minio.messages.Item;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -22,6 +23,9 @@ import java.io.FileInputStream;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.List;
@@ -57,6 +61,9 @@ import java.util.concurrent.locks.ReentrantLock;
 @Service
 public class AlertServiceImpl implements AlertService {
 
+    /** 与 realtime_algorithm_service、docker 挂载约定一致（ALERT_IMAGES_DIR=/app/alert_images） */
+    private static final ZoneId ALERT_EVENT_ZONE = ZoneId.of("Asia/Shanghai");
+
     @Autowired(required = false)
     private MinioClient minioClient;
 
@@ -68,6 +75,12 @@ public class AlertServiceImpl implements AlertService {
 
     @Autowired(required = false)
     private JdbcTemplate jdbcTemplate;
+
+    /**
+     * 告警图片根前缀（默认 /app）。算法若写相对路径或路径被截断时，可辅助拼接可读路径。
+     */
+    @Value("${alert.images.base-dir:/app}")
+    private String alertImagesBaseDir;
 
     // MinIO清空后的等待时间控制（兼容Python端逻辑）
     private volatile long lastMinioCleanupTime = 0; // 上次清空MinIO的时间戳
@@ -258,6 +271,48 @@ public class AlertServiceImpl implements AlertService {
     }
 
     /**
+     * 解析告警图片在本机的可读路径：优先绝对路径；否则尝试以 alert.images.base-dir（默认 /app）为根拼接。
+     */
+    private File resolveLocalAlertImageFile(String imagePath) {
+        if (!StringUtils.hasText(imagePath)) {
+            return new File("");
+        }
+        String trimmed = imagePath.trim();
+        File direct = new File(trimmed);
+        if (direct.isFile()) {
+            return direct;
+        }
+        String base = StringUtils.hasText(alertImagesBaseDir) ? alertImagesBaseDir.trim() : "/app";
+        if (base.endsWith("/") || base.endsWith(File.separator)) {
+            base = base.substring(0, base.length() - 1);
+        }
+        String relative = trimmed.startsWith("/") ? trimmed.substring(1) : trimmed;
+        File underBase = new File(base + File.separator + relative);
+        if (underBase.isFile()) {
+            log.debug("告警图片路径解析成功: raw={}, resolved={}", imagePath, underBase.getAbsolutePath());
+            return underBase;
+        }
+        return direct;
+    }
+
+    /**
+     * Python 与 realtime 算法约定：time 为 Asia/Shanghai 墙钟（无时区后缀）；入库为带 +08 的 OffsetDateTime，避免 PG timestamptz 等组合产生 ±8h。
+     */
+    private OffsetDateTime parseAlertEventTime(String timeStr) {
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+        if (!StringUtils.hasText(timeStr)) {
+            return OffsetDateTime.now(ALERT_EVENT_ZONE);
+        }
+        try {
+            LocalDateTime naive = LocalDateTime.parse(timeStr.trim(), formatter);
+            return naive.atZone(ALERT_EVENT_ZONE).toOffsetDateTime();
+        } catch (Exception e) {
+            log.warn("解析告警时间失败，使用当前时间(Asia/Shanghai): timeStr={}, error={}", timeStr, e.getMessage());
+            return OffsetDateTime.now(ALERT_EVENT_ZONE);
+        }
+    }
+
+    /**
      * 上传图片到MinIO的抓拍空间存储桶
      * 根据device_id查询snap_space获取bucket_name
      * 如果最近5秒内清空过MinIO，将跳过上传
@@ -284,10 +339,9 @@ public class AlertServiceImpl implements AlertService {
         }
 
         try {
-            // 检查本地文件是否存在
-            File imageFile = new File(imagePath);
+            File imageFile = resolveLocalAlertImageFile(imagePath);
             if (!imageFile.exists() || !imageFile.isFile()) {
-                log.warn("抓拍图片文件不存在: imagePath={}", imagePath);
+                log.warn("抓拍图片文件不存在: imagePath={}, resolved={}", imagePath, imageFile.getAbsolutePath());
                 return null;
             }
 
@@ -476,10 +530,9 @@ public class AlertServiceImpl implements AlertService {
         }
 
         try {
-            // 检查本地文件是否存在
-            File imageFile = new File(imagePath);
+            File imageFile = resolveLocalAlertImageFile(imagePath);
             if (!imageFile.exists() || !imageFile.isFile()) {
-                log.warn("告警图片文件不存在: imagePath={}", imagePath);
+                log.warn("告警图片文件不存在: imagePath={}, resolved={}", imagePath, imageFile.getAbsolutePath());
                 return null;
             }
 
@@ -882,22 +935,8 @@ public class AlertServiceImpl implements AlertService {
                 }
             }
             
-            // 处理时间字段
-            String timeStr = alert.getTime();
-            LocalDateTime alertTime;
-            if (StringUtils.hasText(timeStr)) {
-                try {
-                    // 尝试解析时间字符串，格式：YYYY-MM-DD HH:MM:SS
-                    DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-                    alertTime = LocalDateTime.parse(timeStr, formatter);
-                } catch (Exception e) {
-                    log.warn("解析告警时间失败，使用当前时间: timeStr={}, error={}", timeStr, e.getMessage());
-                    alertTime = LocalDateTime.now();
-                }
-            } else {
-                alertTime = LocalDateTime.now();
-            }
-            alertDO.setTime(alertTime);
+            // 处理时间字段（与 Python BEIJING_TZ 输出语义一致：东八区墙钟）
+            alertDO.setTime(parseAlertEventTime(alert.getTime()));
             
             alertDO.setDeviceId(notificationMessage.getDeviceId());
             alertDO.setDeviceName(notificationMessage.getDeviceName());
@@ -1078,18 +1117,18 @@ public class AlertServiceImpl implements AlertService {
                     return true;
                 }
 
-                // 解析告警时间
+                // 解析告警时间（布防按东八区墙钟小时/星期）
                 LocalDateTime alertTime;
                 if (StringUtils.hasText(alertTimeStr)) {
                     try {
                         DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-                        alertTime = LocalDateTime.parse(alertTimeStr, formatter);
+                        alertTime = LocalDateTime.parse(alertTimeStr.trim(), formatter);
                     } catch (Exception e) {
-                        log.warn("解析告警时间失败，使用当前时间: timeStr={}, error={}", alertTimeStr, e.getMessage());
-                        alertTime = LocalDateTime.now();
+                        log.warn("解析告警时间失败，使用当前时间(Asia/Shanghai): timeStr={}, error={}", alertTimeStr, e.getMessage());
+                        alertTime = ZonedDateTime.now(ALERT_EVENT_ZONE).toLocalDateTime();
                     }
                 } else {
-                    alertTime = LocalDateTime.now();
+                    alertTime = ZonedDateTime.now(ALERT_EVENT_ZONE).toLocalDateTime();
                 }
 
                 // 获取当前是星期几（0=周一，6=周日）

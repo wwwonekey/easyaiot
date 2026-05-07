@@ -7,7 +7,7 @@
         <result column="event" jdbcType="VARCHAR" property="event"/>
         <result column="region" jdbcType="VARCHAR" property="region"/>
         <result column="information" jdbcType="VARCHAR" property="information"/>
-        <result column="time" jdbcType="TIMESTAMP" property="time"/>
+        <result column="time" jdbcType="TIMESTAMP_WITH_TIMEZONE" property="time"/>
         <result column="device_id" jdbcType="VARCHAR" property="deviceId"/>
         <result column="device_name" jdbcType="VARCHAR" property="deviceName"/>
         <result column="image_path" jdbcType="VARCHAR" property="imagePath"/>
@@ -40,7 +40,7 @@
             #{event,jdbcType=VARCHAR},
             #{region,jdbcType=VARCHAR},
             #{information,jdbcType=VARCHAR},
-            #{time,jdbcType=TIMESTAMP},
+            #{time,jdbcType=TIMESTAMP_WITH_TIMEZONE},
             #{deviceId,jdbcType=VARCHAR},
             #{deviceName,jdbcType=VARCHAR},
             #{imagePath,jdbcType=VARCHAR},
