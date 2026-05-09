@@ -124,7 +124,8 @@ prepare_zlmediakit_dirs_and_config() {
     local zlm_log="${zlm_base}/log"
     local zlm_conf="${zlm_base}/conf"
     local zlm_config_file="${zlm_conf}/config.ini"
-    local zlm_default_secret="035c73f7-bb6b-4889-a715-d9eb2d1925cc"
+    # 必须与 iot-gb28181 中 media.secret 一致，否则 HTTP API 返回 Please login first（code -100）
+    local zlm_default_secret="AdJQu9CMnwZvCc139s8lF0F9dhk6sNXG"
 
     print_info "数据目录根路径: $zlm_base"
 
