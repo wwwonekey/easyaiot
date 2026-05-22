@@ -28,25 +28,58 @@
                   <div class="flex" style="justify-content: space-between;">
                     <div class="prop">
                       <div class="label">设备型号</div>
-                      <div class="value model-value" style="cursor: pointer;" @click="handleCopy(item.model)">
+                      <div
+                        class="value model-value"
+                        :class="{ 'is-copyable': hasCopyableDeviceModel(item.model) }"
+                        @click="hasCopyableDeviceModel(item.model) && handleCopy(item.model)"
+                      >
                         <span class="model-text">{{ item.model || '-' }}</span>
-                        <Icon 
-                          icon="tdesign:copy-filled" 
-                          :size="14" 
-                          color="#4287FCFF" 
+                        <Icon
+                          v-if="hasCopyableDeviceModel(item.model)"
+                          icon="tdesign:copy-filled"
+                          :size="14"
+                          color="#4287FCFF"
                           class="model-copy-icon"
                         />
                       </div>
                     </div>
                     <div class="prop">
                       <div class="label">制造商</div>
-                      <div class="value">{{ item.manufacturer || '-' }}</div>
+                      <div
+                        class="value field-copy-value"
+                        :class="{ 'is-copyable': hasCopyableManufacturer(item.manufacturer) }"
+                        @click="
+                          hasCopyableManufacturer(item.manufacturer) && handleCopy(item.manufacturer)
+                        "
+                      >
+                        <span class="field-text">{{ item.manufacturer || '-' }}</span>
+                        <Icon
+                          v-if="hasCopyableManufacturer(item.manufacturer)"
+                          icon="tdesign:copy-filled"
+                          :size="14"
+                          color="#4287FCFF"
+                          class="field-copy-icon"
+                        />
+                      </div>
                     </div>
                   </div>
                   <div class="flex" style="justify-content: space-between;">
                     <div class="prop">
                       <div class="label">IP地址</div>
-                      <div class="value">{{ item.ip || '-' }}</div>
+                      <div
+                        class="value field-copy-value"
+                        :class="{ 'is-copyable': hasCopyableDeviceIp(item.ip) }"
+                        @click="hasCopyableDeviceIp(item.ip) && handleCopy(item.ip)"
+                      >
+                        <span class="field-text">{{ item.ip || '-' }}</span>
+                        <Icon
+                          v-if="hasCopyableDeviceIp(item.ip)"
+                          icon="tdesign:copy-filled"
+                          :size="14"
+                          color="#4287FCFF"
+                          class="field-copy-icon"
+                        />
+                      </div>
                     </div>
                     <div class="prop">
                       <div class="label">端口</div>
@@ -114,7 +147,12 @@ import DAHUA_IMAGE from "@/assets/images/video/dahua.png";
 import HUAWEI_IMAGE from "@/assets/images/video/huawei.png";
 import OTHER_IMAGE from "@/assets/images/video/other.png";
 import type { DeviceInfo, StreamStatusResponse } from '@/api/device/camera';
-import { formatCameraDeviceLabel } from '@/views/camera/utils/deviceLabel';
+import {
+  formatCameraDeviceLabel,
+  hasCopyableDeviceIp,
+  hasCopyableDeviceModel,
+  hasCopyableManufacturer,
+} from '@/views/camera/utils/deviceLabel';
 import { hasDirectPlayStream, supportsRtspForward } from '@/views/camera/utils/devicePlay';
 
 const ListItem = List.Item;
@@ -523,13 +561,19 @@ defineExpose({
           }
         }
 
-        .model-value {
+        .model-value,
+        .field-copy-value {
           display: flex;
           align-items: center;
           gap: 4px;
           overflow: visible;
 
-          .model-text {
+          &.is-copyable {
+            cursor: pointer;
+          }
+
+          .model-text,
+          .field-text {
             max-width: 90px;
             overflow: hidden;
             text-overflow: ellipsis;
@@ -537,7 +581,8 @@ defineExpose({
             flex-shrink: 1;
           }
 
-          .model-copy-icon {
+          .model-copy-icon,
+          .field-copy-icon {
             flex-shrink: 0;
           }
         }

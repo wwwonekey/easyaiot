@@ -8,6 +8,32 @@ export function isGb28181Device(source?: string | null, deviceKind?: string): bo
   return false;
 }
 
+/** 字段是否为无意义的占位展示值 */
+function isEmptyOrPlaceholder(value?: string | null, placeholders: string[] = ['-']): boolean {
+  const v = (value ?? '').trim();
+  if (!v) return true;
+  return placeholders.some((p) => v.toLowerCase() === p.toLowerCase());
+}
+
+/** 设备型号是否有可复制的有效值（国标无型号或占位符时不展示复制按钮） */
+export function hasCopyableDeviceModel(model?: string | null): boolean {
+  if (isEmptyOrPlaceholder(model)) return false;
+  if ((model ?? '').trim() === 'GB28181-Channel') return false;
+  return true;
+}
+
+/** 制造商是否有可复制的有效值（国标默认「GB28181」占位时不展示复制按钮） */
+export function hasCopyableManufacturer(manufacturer?: string | null): boolean {
+  if (isEmptyOrPlaceholder(manufacturer)) return false;
+  if ((manufacturer ?? '').trim() === 'GB28181') return false;
+  return true;
+}
+
+/** IP 地址是否有可复制的有效值 */
+export function hasCopyableDeviceIp(ip?: string | null): boolean {
+  return !isEmptyOrPlaceholder(ip);
+}
+
 /** 国标通道在 device 表中的虚拟设备 ID（与 VIDEO gb28181_sync 一致） */
 export function gb28181VirtualDeviceId(sipDeviceId: string, channelId: string): string {
   return `gb28181_${sipDeviceId}_${channelId}`;

@@ -19,35 +19,30 @@
                 JSON 编辑
               </a-button>
             </div>
-            <a-input
-              v-model:value="directorySearchText"
-              placeholder="请输入目录名称"
-              allow-clear
-              style="margin-top: 12px;"
-            >
-              <template #prefix>
-                <Icon icon="ant-design:search-outlined" />
-              </template>
-            </a-input>
           </div>
           <div class="tree-content">
-            <div
-              v-for="dir in filteredDirectoryTree"
-              :key="dir.id"
-              class="tree-node"
-            >
-              <DirectoryTreeNode
-                :directory="dir"
-                :level="0"
-                :expanded-keys="expandedKeys"
-                :selected-id="selectedDirectoryId"
-                @toggle="handleToggleNode"
-                @select="handleSelectDirectory"
-                @edit="handleEditDirectory"
-                @delete="handleDeleteDirectory"
-              />
+            <div v-if="selectedDirectoryId && !selectedDirectoryIsDefault" class="tree-dir-actions">
+              <a-button type="link" size="small" @click="handleEditSelectedDirectory">
+                编辑目录
+              </a-button>
+              <a-popconfirm title="确定删除此目录？" @confirm="handleDeleteSelectedDirectory">
+                <a-button type="link" size="small" danger>删除目录</a-button>
+              </a-popconfirm>
             </div>
-            <a-empty v-if="filteredDirectoryTree.length === 0" description="暂无目录" />
+            <BasicTree
+              search
+              :showIcon="true"
+              :indent="12"
+              v-model:selectedKeys="treeSelectedKeys"
+              :expanded-keys="treeExpandedKeys"
+              :tree-data="monitorTreeItems"
+              :load-data="onLoadGbDeviceChannels"
+              :field-names="{ key: 'key', title: 'title' }"
+              class="directory-monitor-tree"
+              :loading="treeLoading"
+              @select="handleMonitorTreeSelect"
+              @update:expanded-keys="treeExpandedKeys = $event"
+            />
           </div>
         </div>
       </div>
@@ -80,10 +75,40 @@
                 {{ formatCameraDeviceLabel(record) }}
               </span>
             </template>
-            <template v-else-if="['id', 'model'].includes(column.key)">
-              <span style="cursor: pointer" @click="handleCopy(record[column.key])">
-                <Icon icon="tdesign:copy-filled" color="#4287FCFF"/> {{ record[column.key] }}
+            <template v-else-if="column.key === 'id'">
+              <span style="cursor: pointer" @click="handleCopy(record.id)">
+                <Icon icon="tdesign:copy-filled" color="#4287FCFF"/> {{ record.id }}
               </span>
+            </template>
+            <template v-else-if="column.key === 'model'">
+              <span
+                v-if="hasCopyableDeviceModel(record.model)"
+                style="cursor: pointer"
+                @click="handleCopy(record.model)"
+              >
+                <Icon icon="tdesign:copy-filled" color="#4287FCFF"/> {{ record.model }}
+              </span>
+              <span v-else>{{ record.model || '-' }}</span>
+            </template>
+            <template v-else-if="column.key === 'manufacturer'">
+              <span
+                v-if="hasCopyableManufacturer(record.manufacturer)"
+                style="cursor: pointer"
+                @click="handleCopy(record.manufacturer)"
+              >
+                <Icon icon="tdesign:copy-filled" color="#4287FCFF"/> {{ record.manufacturer }}
+              </span>
+              <span v-else>{{ record.manufacturer || '-' }}</span>
+            </template>
+            <template v-else-if="column.key === 'ip'">
+              <span
+                v-if="hasCopyableDeviceIp(record.ip)"
+                style="cursor: pointer"
+                @click="handleCopy(record.ip)"
+              >
+                <Icon icon="tdesign:copy-filled" color="#4287FCFF"/> {{ record.ip }}
+              </span>
+              <span v-else>{{ record.ip || '-' }}</span>
             </template>
 
             <!-- 在线状态显示 -->
@@ -125,30 +150,52 @@ import { ref, onMounted, computed } from 'vue';
 import { useMessage } from '@/hooks/web/useMessage';
 import { useModal } from '@/components/Modal';
 import { BasicTable, TableAction, useTable } from '@/components/Table';
+import { BasicTree, type TreeItem } from '@/components/Tree';
 import { Icon } from '@/components/Icon';
-import { Tag as ATag, Input as AInput, Empty as AEmpty } from 'ant-design-vue';
+import { Tag as ATag, Input as AInput } from 'ant-design-vue';
 import {
-  getDirectoryList,
   deleteDirectory,
-  getDirectoryDevices,
   getStreamStatus,
   moveDeviceToDirectory,
   refreshDevices,
   syncGb28181Devices,
   type DeviceDirectory,
   type DeviceInfo,
+  type MonitorTreeDirectoryNode,
   type StreamStatusResponse,
 } from '@/api/device/camera';
+import { getDeviceChannels } from '@/api/device/gb28181';
+import type { TreeProps } from 'ant-design-vue';
 import DirectoryModal from './DirectoryModal.vue';
 import DirectoryJsonModal from './DirectoryJsonModal.vue';
-import DirectoryTreeNode from './DirectoryTreeNode.vue';
 import MoveDevicesToDirectoryModal from './MoveDevicesToDirectoryModal.vue';
 import {
   PlusOutlined,
 } from '@ant-design/icons-vue';
-import { formatCameraDeviceLabel, isNvrChannelDevice } from '@/views/camera/utils/deviceLabel';
-import { buildDirectoryDeviceTableRows, fetchNvrListBrief } from '@/views/camera/utils/nvrDeviceGroup';
+import {
+  formatCameraDeviceLabel,
+  hasCopyableDeviceIp,
+  hasCopyableDeviceModel,
+  hasCopyableManufacturer,
+  isNvrChannelDevice,
+} from '@/views/camera/utils/deviceLabel';
+import { isGb28181SipListRow } from '@/views/camera/utils/gb28181DeviceGroup';
+import { buildDirectoryDeviceTableRows } from '@/views/camera/utils/nvrDeviceGroup';
 import { collectWvpGbChannelsForSync } from '@/views/camera/utils/wvpGbSync';
+import {
+  buildWvpChannelTreeNodes,
+} from '@/views/camera/utils/gb28181Tree';
+import { enrichWvpChannelTreeNodes } from '@/views/camera/utils/monitorGbDisplay';
+import {
+  collectMonitorTreeExpandedKeys,
+  parseMonitorDirectoryId,
+} from '@/views/camera/utils/monitorDeviceTree';
+import {
+  buildDirectoryDevicesForTable,
+  fetchMonitorDirectoryTreeBundle,
+  findMonitorDirectoryNode,
+  mapMonitorTreeToDeviceDirectories,
+} from '@/views/camera/utils/monitorDirectoryTreeLoad';
 
 const props = withDefaults(
   defineProps<{
@@ -170,53 +217,24 @@ const checkedRows = ref<DeviceInfo[]>([]);
 const selectedDirectoryId = ref<number | null>(null);
 const selectedDirectoryName = ref<string>('');
 const directoryTree = ref<DeviceDirectory[]>([]);
-const expandedKeys = ref<Set<number>>(new Set());
-const directorySearchText = ref<string>('');
 const syncCamerasLoading = ref(false);
+const treeLoading = ref(false);
+const monitorTreeRaw = ref<MonitorTreeDirectoryNode[]>([]);
+const monitorTreeItems = ref<TreeItem[]>([]);
+const monitorWvpDevices = ref<Record<string, any>[]>([]);
+const treeSelectedKeys = ref<string[]>([]);
+const treeExpandedKeys = ref<string[]>([]);
+
+const selectedDirectoryIsDefault = computed(() => {
+  if (selectedDirectoryId.value == null) return false;
+  const dir = findMonitorDirectoryNode(monitorTreeRaw.value, selectedDirectoryId.value);
+  return !!dir?.is_default;
+});
 
 // 设备流状态映射
 const deviceStreamStatuses = ref<Record<string, string>>({});
-/** 缓存 NVR 元数据，避免表格每次翻页都请求 */
-let cachedNvrsPromise: ReturnType<typeof fetchNvrListBrief> | null = null;
-
-function getCachedNvrs() {
-  if (!cachedNvrsPromise) {
-    cachedNvrsPromise = fetchNvrListBrief().catch(() => []);
-  }
-  return cachedNvrsPromise;
-}
-
-function invalidateNvrCache() {
-  cachedNvrsPromise = null;
-}
-
-// 过滤目录树（根据搜索文本）
-const filteredDirectoryTree = computed(() => {
-  if (!directorySearchText.value) {
-    return directoryTree.value;
-  }
-  
-  const searchLower = directorySearchText.value.toLowerCase();
-  
-  const filterTree = (nodes: DeviceDirectory[]): DeviceDirectory[] => {
-    return nodes
-      .map(node => {
-        const matches = node.name.toLowerCase().includes(searchLower);
-        const filteredChildren = node.children ? filterTree(node.children) : [];
-        
-        if (matches || filteredChildren.length > 0) {
-          return {
-            ...node,
-            children: filteredChildren.length > 0 ? filteredChildren : node.children,
-          };
-        }
-        return null;
-      })
-      .filter((node): node is DeviceDirectory => node !== null);
-  };
-  
-  return filterTree(directoryTree.value);
-});
+/** 与 monitor-tree 一并缓存的 NVR 元数据 */
+let cachedMonitorBundle: Awaited<ReturnType<typeof fetchMonitorDirectoryTreeBundle>> | null = null;
 
 // 查找默认分组（根级）
 const findDefaultDirectory = (nodes: DeviceDirectory[]): DeviceDirectory | null => {
@@ -230,165 +248,114 @@ const findDefaultDirectory = (nodes: DeviceDirectory[]): DeviceDirectory | null 
   return nodes.find((n) => n.name === '默认分组') || null;
 };
 
-// 收集所有目录ID（递归）
-const collectDirectoryIds = (nodes: DeviceDirectory[]): Set<number> => {
-  const ids = new Set<number>();
-  const traverse = (dirs: DeviceDirectory[]) => {
-    dirs.forEach(dir => {
-      ids.add(dir.id);
-      if (dir.children && dir.children.length > 0) {
-        traverse(dir.children);
-      }
-    });
-  };
-  traverse(nodes);
-  return ids;
-};
-
-// 加载目录列表
-const loadDirectoryList = async () => {
-  try {
-    const response = await getDirectoryList();
-    const data = response.code !== undefined ? response.data : response;
-    
-    if (data && Array.isArray(data)) {
-      // 保存当前的展开状态
-      const currentExpandedKeys = new Set(expandedKeys.value);
-      const isInitialLoad = directoryTree.value.length === 0;
-      
-      directoryTree.value = data;
-      
-      const defaultDir = findDefaultDirectory(data);
-      if (isInitialLoad) {
-        if (defaultDir) {
-          selectedDirectoryId.value = defaultDir.id;
-          selectedDirectoryName.value = defaultDir.name;
-          expandedKeys.value = new Set([defaultDir.id]);
-          reloadDeviceTable();
-        } else {
-          expandedKeys.value = new Set();
+const onLoadGbDeviceChannels: TreeProps['loadData'] = (treeNode) => {
+  return new Promise<void>((resolve) => {
+    const key = String(treeNode?.key ?? treeNode?.eventKey ?? '');
+    if (!key.startsWith('gb_dev_')) {
+      resolve();
+      return;
+    }
+    const sipDeviceId = key.slice('gb_dev_'.length);
+    const dataRef = (treeNode.dataRef ?? treeNode) as TreeItem;
+    if (dataRef?.children?.length) {
+      resolve();
+      return;
+    }
+    getDeviceChannels(sipDeviceId)
+      .then((res) => {
+        const list = res.data || res.list || [];
+        dataRef.children = enrichWvpChannelTreeNodes(
+          buildWvpChannelTreeNodes(list, sipDeviceId),
+          monitorTreeItems.value,
+        );
+        dataRef.isLeaf = !dataRef.children?.length;
+        monitorTreeItems.value = [...monitorTreeItems.value];
+        if (!treeExpandedKeys.value.includes(key)) {
+          treeExpandedKeys.value = [...treeExpandedKeys.value, key];
         }
-      } else {
-        // 非首次加载时，保留当前展开状态，但清理掉已经不存在的目录的展开状态
-        const validIds = collectDirectoryIds(data);
-        const newExpandedKeys = new Set<number>();
-        currentExpandedKeys.forEach(id => {
-          if (validIds.has(id)) {
-            newExpandedKeys.add(id);
-          }
-        });
-        expandedKeys.value = newExpandedKeys;
-      }
-    } else {
-      directoryTree.value = [];
-      // 如果数据为空，清空展开状态
-      if (directoryTree.value.length === 0) {
-        expandedKeys.value = new Set();
-      }
-    }
-  } catch (error) {
-    console.error('加载目录列表失败', error);
-    directoryTree.value = [];
-  }
+        resolve();
+      })
+      .catch(() => resolve());
+  });
 };
 
-// 切换节点展开/折叠（手风琴效果）
-const handleToggleNode = (directoryId: number, level: number) => {
-  const newExpandedKeys = new Set(expandedKeys.value);
-  
-  if (newExpandedKeys.has(directoryId)) {
-    // 折叠：移除当前节点及其所有子节点
-    newExpandedKeys.delete(directoryId);
-    removeChildrenKeys(directoryId, newExpandedKeys);
-  } else {
-    // 展开：如果是同一级的其他节点已展开，先折叠它们（手风琴效果）
-    if (level === 0) {
-      // 一级目录：折叠所有其他一级目录
-      directoryTree.value.forEach(dir => {
-        if (dir.id !== directoryId && newExpandedKeys.has(dir.id)) {
-          newExpandedKeys.delete(dir.id);
-          removeChildrenKeys(dir.id, newExpandedKeys);
-        }
-      });
-    } else {
-      // 二级或三级目录：找到同级节点并折叠
-      const parent = findParentDirectory(directoryId, directoryTree.value);
-      if (parent) {
-        const siblings = parent.children || [];
-        siblings.forEach(sibling => {
-          if (sibling.id !== directoryId && newExpandedKeys.has(sibling.id)) {
-            newExpandedKeys.delete(sibling.id);
-            removeChildrenKeys(sibling.id, newExpandedKeys);
-          }
-        });
-      }
-    }
-    
-    // 展开当前节点
-    newExpandedKeys.add(directoryId);
-  }
-  
-  expandedKeys.value = newExpandedKeys;
-};
-
-// 移除节点的所有子节点的展开状态
-const removeChildrenKeys = (parentId: number, keys: Set<number>) => {
-  // 递归查找并移除所有子节点的展开状态
-  const removeFromNode = (node: DeviceDirectory) => {
-    if (node.children && node.children.length > 0) {
-      node.children.forEach(child => {
-        keys.delete(child.id);
-        removeFromNode(child);
-      });
-    }
-  };
-  
-  // 查找目标节点
-  const findNode = (nodes: DeviceDirectory[], targetId: number): DeviceDirectory | null => {
-    for (const node of nodes) {
-      if (node.id === targetId) {
-        return node;
-      }
-      if (node.children && node.children.length > 0) {
-        const found = findNode(node.children, targetId);
-        if (found) {
-          return found;
-        }
-      }
-    }
-    return null;
-  };
-  
-  const targetNode = findNode(directoryTree.value, parentId);
-  if (targetNode) {
-    removeFromNode(targetNode);
-  }
-};
-
-// 查找父目录
-const findParentDirectory = (childId: number, nodes: DeviceDirectory[]): DeviceDirectory | null => {
-  for (const node of nodes) {
-    if (node.children) {
-      const found = node.children.find(child => child.id === childId);
-      if (found) {
-        return node;
-      }
-      const parent = findParentDirectory(childId, node.children);
-      if (parent) {
-        return parent;
-      }
-    }
-  }
-  return null;
-};
-
-// 选择目录
-const handleSelectDirectory = (directory: DeviceDirectory) => {
-  selectedDirectoryId.value = directory.id;
-  selectedDirectoryName.value = directory.name;
+function selectDirectoryById(directoryId: number, directoryName: string) {
+  selectedDirectoryId.value = directoryId;
+  selectedDirectoryName.value = directoryName;
+  treeSelectedKeys.value = [`dir_${directoryId}`];
   checkedKeys.value = [];
   checkedRows.value = [];
   reloadDeviceTable();
+}
+
+function handleMonitorTreeSelect(keys: string[]) {
+  const key = keys[0];
+  if (!key?.startsWith('dir_')) return;
+  const dirId = parseMonitorDirectoryId(key);
+  if (dirId == null) return;
+  const dir = findMonitorDirectoryNode(monitorTreeRaw.value, dirId);
+  if (!dir) return;
+  selectDirectoryById(dir.id, dir.name);
+}
+
+/** 与分屏监控一致：monitor-tree + WVP 国标 + NVR */
+const loadDirectoryList = async () => {
+  try {
+    treeLoading.value = true;
+    const bundle = await fetchMonitorDirectoryTreeBundle();
+    cachedMonitorBundle = bundle;
+    monitorTreeRaw.value = bundle.rawTree;
+    monitorTreeItems.value = bundle.treeItems;
+    monitorWvpDevices.value = bundle.wvpDevices;
+    directoryTree.value = mapMonitorTreeToDeviceDirectories(bundle.rawTree);
+
+    const isInitialLoad = !selectedDirectoryId.value;
+    const defaultDir = findDefaultDirectory(directoryTree.value);
+    treeExpandedKeys.value = collectMonitorTreeExpandedKeys(bundle.treeItems);
+
+    if (isInitialLoad && defaultDir) {
+      selectDirectoryById(defaultDir.id, defaultDir.name);
+    } else if (selectedDirectoryId.value) {
+      const still = findMonitorDirectoryNode(bundle.rawTree, selectedDirectoryId.value);
+      if (still) {
+        selectedDirectoryName.value = still.name;
+        treeSelectedKeys.value = [`dir_${still.id}`];
+      } else if (defaultDir) {
+        selectDirectoryById(defaultDir.id, defaultDir.name);
+      }
+      reloadDeviceTable();
+    }
+  } catch (error) {
+    console.error('加载设备目录树失败', error);
+    directoryTree.value = [];
+    monitorTreeItems.value = [];
+    monitorTreeRaw.value = [];
+  } finally {
+    treeLoading.value = false;
+  }
+};
+
+function findDirectoryMeta(directoryId: number, nodes: DeviceDirectory[] = directoryTree.value): DeviceDirectory | null {
+  for (const node of nodes) {
+    if (node.id === directoryId) return node;
+    if (node.children?.length) {
+      const found = findDirectoryMeta(directoryId, node.children);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+const handleEditSelectedDirectory = () => {
+  if (selectedDirectoryId.value == null) return;
+  const record = findDirectoryMeta(selectedDirectoryId.value);
+  if (record) handleEditDirectory(record);
+};
+
+const handleDeleteSelectedDirectory = () => {
+  if (selectedDirectoryId.value == null) return;
+  const record = findDirectoryMeta(selectedDirectoryId.value);
+  if (record) handleDeleteDirectory(record);
 };
 
 // 编辑目录
@@ -413,8 +380,6 @@ const handleDeleteDirectory = async (directory: DeviceDirectory) => {
         selectedDirectoryName.value = '';
         reloadDeviceTable();
       }
-      // 移除展开状态
-      expandedKeys.value.delete(directory.id);
     } else {
       createMessage.error(result.msg || '删除失败');
     }
@@ -475,27 +440,21 @@ const getDeviceColumns = () => {
 const [registerTable, { reload: reloadDeviceTable }] = useTable({
   title: '设备列表',
   api: async (params) => {
-    // 如果没有选择目录，返回空数据
     if (!selectedDirectoryId.value) {
       return { data: [], total: 0 };
     }
 
     try {
-      const response = await getDirectoryDevices(selectedDirectoryId.value, {
-        pageNo: params.pageNo || 1,
-        pageSize: params.pageSize || 10,
-        search: params.search || '',
-        name: params.name || '',
-        online: params.online !== undefined ? params.online : undefined,
-        model: params.model || '',
-      });
-      
-      const data = response.code !== undefined ? response.data : response;
-      const total = response.code !== undefined ? response.total : (Array.isArray(data) ? data.length : 0);
-      
-      if (data && Array.isArray(data)) {
-        const nvrs = await getCachedNvrs();
-        let filteredData = buildDirectoryDeviceTableRows(data, nvrs);
+      const dirNode = findMonitorDirectoryNode(monitorTreeRaw.value, selectedDirectoryId.value);
+      if (!dirNode) {
+        return { data: [], total: 0 };
+      }
+
+      const nvrs = cachedMonitorBundle?.nvrs ?? [];
+      let filteredData = buildDirectoryDeviceTableRows(
+        buildDirectoryDevicesForTable(dirNode, monitorWvpDevices.value),
+        nvrs,
+      );
         
         if (params.name) {
           filteredData = filteredData.filter((device: DeviceInfo) => 
@@ -530,12 +489,15 @@ const [registerTable, { reload: reloadDeviceTable }] = useTable({
         // 已禁用自动检查设备流状态
         // checkAllDevicesStreamStatus(filteredData);
         
+        const pageNo = params.pageNo || 1;
+        const pageSize = params.pageSize || 10;
+        const start = (pageNo - 1) * pageSize;
+        const pageData = devicesWithStatus.slice(start, start + pageSize);
+
         return {
-          data: devicesWithStatus,
-          total: typeof total === 'number' ? total : devicesWithStatus.length,
+          data: pageData,
+          total: devicesWithStatus.length,
         };
-      }
-      return { data: [], total: 0 };
     } catch (error) {
       console.error('加载设备列表失败', error);
       return { data: [], total: 0 };
@@ -608,7 +570,10 @@ const [registerTable, { reload: reloadDeviceTable }] = useTable({
       checkedRows.value = nextRows;
     },
     getCheckboxProps: (record: DeviceInfo & { _isNvrGroup?: boolean }) => ({
-      disabled: !!record._isNvrGroup || isNvrChannelDevice(record),
+      disabled:
+        !!record._isNvrGroup ||
+        isNvrChannelDevice(record) ||
+        isGb28181SipListRow(record),
     }),
   },
 });
@@ -744,7 +709,7 @@ const getTableActions = (record: DeviceInfo & { _isNvrGroup?: boolean; children?
     });
   }
 
-  if (!isNvrChannelDevice(record)) {
+  if (!isNvrChannelDevice(record) && !isGb28181SipListRow(record)) {
     actions.push(
       {
         icon: 'ant-design:folder-open-outlined',
@@ -887,7 +852,7 @@ const handleSyncCameras = async () => {
     }
 
     createMessage.success({ content: parts.join('；'), key: 'sync-cameras' });
-    invalidateNvrCache();
+    cachedMonitorBundle = null;
     await loadDirectoryList();
     if (selectedDirectoryId.value) {
       reloadDeviceTable();
@@ -911,7 +876,7 @@ const handleOpenJsonEditor = () => {
 
 // 目录操作成功回调
 const handleDirectorySuccess = () => {
-  invalidateNvrCache();
+  cachedMonitorBundle = null;
   loadDirectoryList();
   if (selectedDirectoryId.value) {
     reloadDeviceTable();
@@ -958,7 +923,7 @@ onMounted(() => {
 }
 
 .directory-sidebar {
-  width: 300px;
+  width: 350px;
   flex-shrink: 0;
   background: #fff;
   border-radius: 4px;
@@ -988,9 +953,18 @@ onMounted(() => {
       flex: 1;
       overflow-y: auto;
       overflow-x: hidden;
-      
-      .tree-node {
-        margin-bottom: 0;
+      min-height: 0;
+
+      .tree-dir-actions {
+        display: flex;
+        gap: 4px;
+        margin-bottom: 8px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid #f0f0f0;
+      }
+
+      :deep(.directory-monitor-tree) {
+        min-height: 200px;
       }
     }
   }

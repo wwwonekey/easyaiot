@@ -88,8 +88,38 @@
                       {{ formatCameraDeviceLabel(record) }}
                     </span>
                   </template>
+                  <template v-else-if="column.key === 'model'">
+                    <span
+                      v-if="hasCopyableDeviceModel(record.model)"
+                      style="cursor: pointer"
+                      @click="handleCopy(record.model)"
+                    >
+                      <Icon icon="tdesign:copy-filled" color="#4287FCFF"/> {{ record.model }}
+                    </span>
+                    <span v-else>{{ record.model || '-' }}</span>
+                  </template>
+                  <template v-else-if="column.key === 'manufacturer'">
+                    <span
+                      v-if="hasCopyableManufacturer(record.manufacturer)"
+                      style="cursor: pointer"
+                      @click="handleCopy(record.manufacturer)"
+                    >
+                      <Icon icon="tdesign:copy-filled" color="#4287FCFF"/> {{ record.manufacturer }}
+                    </span>
+                    <span v-else>{{ record.manufacturer || '-' }}</span>
+                  </template>
+                  <template v-else-if="column.key === 'ip'">
+                    <span
+                      v-if="hasCopyableDeviceIp(record.ip)"
+                      style="cursor: pointer"
+                      @click="handleCopy(record.ip)"
+                    >
+                      <Icon icon="tdesign:copy-filled" color="#4287FCFF"/> {{ record.ip }}
+                    </span>
+                    <span v-else>{{ record.ip || '-' }}</span>
+                  </template>
                   <template
-                    v-else-if="['id', 'model', 'source', 'rtmp_stream', 'http_stream', 'ai_rtmp_stream', 'ai_http_stream'].includes(column.key)">
+                    v-else-if="['id', 'source', 'rtmp_stream', 'http_stream', 'ai_rtmp_stream', 'ai_http_stream'].includes(column.key)">
             <span style="cursor: pointer" @click="handleCopy(record[column.key])"><Icon
               icon="tdesign:copy-filled" color="#4287FCFF"/> {{ record[column.key] }}</span>
                   </template>
@@ -251,7 +281,12 @@ import {
 import { isNvrListRow } from './utils/deviceLabel';
 import StreamForward from "./components/StreamForward/index.vue";
 import Gb28181PullProxy from "@/views/gb28181/components/PullProxy/index.vue";
-import { formatCameraDeviceLabel } from './utils/deviceLabel';
+import {
+  formatCameraDeviceLabel,
+  hasCopyableDeviceIp,
+  hasCopyableDeviceModel,
+  hasCopyableManufacturer,
+} from './utils/deviceLabel';
 import {
   hasDirectPlayStream,
   openDeviceInDialogPlayer,

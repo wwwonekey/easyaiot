@@ -153,10 +153,8 @@ import { BasicArrow } from '@/components/Basic';
 import { Icon } from '@/components/Icon';
 import { CollapseContainer } from '@/components/Container';
 import {
-  getDirectoryMonitorTree,
   syncGb28181Devices,
   type MonitorTreeDeviceNode,
-  type MonitorTreeDirectoryNode,
 } from '@/api/device/camera';
 import { formatCameraDeviceLabel, isGb28181Device } from '@/views/camera/utils/deviceLabel';
 import {
@@ -165,7 +163,6 @@ import {
   resolveGbChannelPlayUrls,
 } from '@/views/camera/utils/devicePlay';
 import {
-  buildMonitorDirectoryTreeNodes,
   collectMonitorTreeExpandedKeys,
   findMonitorDeviceById,
   findMonitorGbDeviceByChannel,
@@ -176,17 +173,13 @@ import {
   parseGbChannelKey,
   type GbChannelRef,
 } from '@/views/camera/utils/gb28181Tree';
-import { getDeviceChannels, queryVideoList } from '@/api/device/gb28181';
-import type { NvrInfo } from '@/api/device/camera';
-import { fetchNvrListBrief } from '@/views/camera/utils/nvrDeviceGroup';
-import { buildMonitorTreeOptionsFromNvrList } from '@/views/camera/utils/monitorDeviceTree';
+import { getDeviceChannels } from '@/api/device/gb28181';
 import { collectWvpGbChannelsForSync } from '@/views/camera/utils/wvpGbSync';
 import {
-  buildGbSipNameMap,
-  buildGbSipNameMapFromDirectoryTree,
   enrichWvpChannelTreeNodes,
   resolveMonitorGbChannelDisplayName,
 } from '@/views/camera/utils/monitorGbDisplay';
+import { fetchMonitorDirectoryTreeBundle } from '@/views/camera/utils/monitorDirectoryTreeLoad';
 import type { TreeProps } from 'ant-design-vue';
 import { useMessage } from '@/hooks/web/useMessage';
 import Jessibuca from '@/components/Player/module/jessibuca.vue';
@@ -403,42 +396,10 @@ const onLoadGbDeviceChannels: TreeProps['loadData'] = (treeNode) => {
   });
 };
 
-function normalizeMonitorTreePayload(res: unknown): MonitorTreeDirectoryNode[] {
-  const payload = (res as { code?: number; data?: { tree?: unknown } })?.code !== undefined
-    ? (res as { data?: { tree?: unknown } }).data
-    : res;
-  if (Array.isArray((payload as { tree?: unknown })?.tree)) {
-    return (payload as { tree: MonitorTreeDirectoryNode[] }).tree;
-  }
-  if (Array.isArray(payload)) {
-    return payload as MonitorTreeDirectoryNode[];
-  }
-  return [];
-}
-
 /** 目录 + NVR 元数据 + WVP 国标设备列表；国标通道展开时再按需请求 WVP */
 async function fetchMonitorTree() {
-  const [res, gbRes, nvrs] = await Promise.all([
-    getDirectoryMonitorTree(),
-    queryVideoList({ page: 1, count: 10000 }).catch(() => ({ data: [] as Record<string, any>[] })),
-    fetchNvrListBrief().catch(() => [] as NvrInfo[]),
-  ]);
-  const tree = normalizeMonitorTreePayload(res);
-  const wvpDevices = Array.isArray(gbRes?.data) ? gbRes.data : [];
-  const nvrList = Array.isArray(nvrs) ? nvrs.filter((n) => n && n.id != null) : [];
-
-  const sipNameMap = buildGbSipNameMap(wvpDevices);
-  buildGbSipNameMapFromDirectoryTree(tree).forEach((name, sip) => {
-    if (!sipNameMap.has(sip)) sipNameMap.set(sip, name);
-  });
-
-  const { nvrNameMap, nvrs: nvrArr } = buildMonitorTreeOptionsFromNvrList(nvrList);
-  treeData.value = buildMonitorDirectoryTreeNodes(tree, {
-    sipNameMap,
-    nvrNameMap,
-    nvrs: nvrArr,
-    wvpDevices,
-  });
+  const bundle = await fetchMonitorDirectoryTreeBundle();
+  treeData.value = bundle.treeItems;
   expandedKeys.value = collectMonitorTreeExpandedKeys(treeData.value);
 }
 
