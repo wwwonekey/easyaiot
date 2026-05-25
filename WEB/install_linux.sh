@@ -103,7 +103,11 @@ docker_build_image() {
     } >> "$pnpm_log"
     print_info "本次构建独立日志: docker-build-logs/docker-build-${ts}.log；历史追加: docker-build-logs/pnpm-build.log"
     set -o pipefail
-    docker build "$@" 2>&1 | tee "$log_new" | tee -a "$pnpm_log"
+    local pnpm_store="${SCRIPT_DIR}/.build-cache/pnpm-store"
+    mkdir -p "${pnpm_store}/v3"
+    docker build \
+        --build-context "pnpm-store=${pnpm_store}" \
+        "$@" 2>&1 | tee "$log_new" | tee -a "$pnpm_log"
     ec=$?
     set +o pipefail
     {

@@ -1,6 +1,8 @@
 # 依赖目录
 node_modules
 .pnpm-store
+.build-cache
+docker-build-logs
 
 # 构建产物（构建阶段不需要，生产阶段会从构建阶段复制）
 dist

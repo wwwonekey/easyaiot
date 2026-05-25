@@ -12,26 +12,32 @@ RUN npm install -g pnpm@9.0.4 && \
     pnpm config set fetch-retry-maxtimeout 120000
 
 WORKDIR /app
-RUN mkdir -p /tmp/web-build-logs /pnpm/store
+RUN mkdir -p /tmp/web-build-logs /pnpm
 
-COPY package.json ./
-COPY pnpm-lock.yaml* ./
+# 先复制依赖清单与 npmrc（利用层缓存）
+COPY package.json pnpm-lock.yaml .npmrc ./
 
-# 复用宿主机 pnpm store + BuildKit 临时缓存（不依赖镜像层缓存）
-RUN --mount=type=bind,source=.build-cache/pnpm-store,target=/pnpm/store \
-    --mount=type=cache,target=/root/.local/share/pnpm/cache,id=web-pnpm-cache \
+# 预拉依赖到 store（pnpm-store 通过 docker build --build-context 传入，见 install_linux.sh）
+RUN --mount=type=bind,from=pnpm-store,source=.,target=/pnpm/store,rw \
+    --mount=type=cache,target=/root/.local/share/pnpm/cache,id=web-pnpm-cache-v2 \
     pnpm config set store-dir /pnpm/store && \
-    if [ -f pnpm-lock.yaml ]; then \
-        pnpm install --frozen-lockfile 2>&1 | tee /tmp/web-build-logs/pnpm-install.log; \
-    else \
-        pnpm install 2>&1 | tee /tmp/web-build-logs/pnpm-install.log; \
-    fi
+    pnpm fetch --frozen-lockfile 2>&1 | tee /tmp/web-build-logs/pnpm-fetch.log || true
 
 COPY . .
 
-RUN set -e && \
-    pnpm build > /tmp/web-build-logs/pnpm-build.log 2>&1 || \
+# 必须在 COPY 源码后 install，否则 node_modules 不完整（cross-env not found）
+RUN --mount=type=bind,from=pnpm-store,source=.,target=/pnpm/store,rw \
+    --mount=type=cache,target=/root/.local/share/pnpm/cache,id=web-pnpm-cache-v2 \
+    pnpm config set store-dir /pnpm/store && \
+    pnpm install --frozen-lockfile 2>&1 | tee /tmp/web-build-logs/pnpm-install.log && \
+    test -x node_modules/.bin/cross-env || (echo "=== pnpm install 未生成 node_modules/.bin/cross-env ===" && exit 1)
+
+RUN --mount=type=bind,from=pnpm-store,source=.,target=/pnpm/store,rw \
+    pnpm config set store-dir /pnpm/store && \
+    set -e && \
+    pnpm run build > /tmp/web-build-logs/pnpm-build.log 2>&1 || \
     (echo "=== pnpm build failed, log: ===" && cat /tmp/web-build-logs/pnpm-build.log && exit 1)
+
 RUN test -d dist || (echo "=== dist missing after build ===" && cat /tmp/web-build-logs/pnpm-build.log && exit 1)
 
 FROM nginx:1.29.2-alpine
