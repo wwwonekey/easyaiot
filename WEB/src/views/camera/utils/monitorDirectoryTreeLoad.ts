@@ -6,7 +6,7 @@ import {
   type MonitorTreeDirectoryNode,
   type NvrInfo,
 } from '@/api/device/camera';
-import { queryVideoList } from '@/api/device/gb28181';
+import { queryAllVideoList } from '@/api/device/gb28181';
 import type { TreeItem } from '@/components/Tree';
 import { buildGbSipNameMap, buildGbSipNameMapFromDirectoryTree } from './monitorGbDisplay';
 import {
@@ -20,6 +20,14 @@ import {
   wvpDeviceToTableRow,
 } from './gb28181DeviceGroup';
 import { parseGb28181Source } from './deviceLabel';
+import {
+  getCachedMonitorDirectoryTreeBundle,
+  invalidateMonitorDirectoryTreeCache,
+  setCachedMonitorDirectoryTreeBundle,
+  type MonitorDirectoryTreeBundle,
+} from './monitorDirectoryTreeCache';
+
+export type { MonitorDirectoryTreeBundle };
 
 export function normalizeMonitorTreePayload(res: unknown): MonitorTreeDirectoryNode[] {
   const payload =
@@ -35,19 +43,22 @@ export function normalizeMonitorTreePayload(res: unknown): MonitorTreeDirectoryN
   return [];
 }
 
-export interface MonitorDirectoryTreeBundle {
-  rawTree: MonitorTreeDirectoryNode[];
-  wvpDevices: Record<string, any>[];
-  nvrs: NvrInfo[];
-  treeItems: TreeItem[];
-  sipNameMap: Map<string, string>;
+export interface FetchMonitorDirectoryTreeOptions {
+  /** 为 false 时在 monitor-tree 请求中触发服务端 WVP 同步（仅手动全量刷新使用） */
+  skipSync?: boolean;
 }
 
 /** 与分屏监控左侧树一致：monitor-tree + WVP 国标列表 + NVR 元数据 */
-export async function fetchMonitorDirectoryTreeBundle(): Promise<MonitorDirectoryTreeBundle> {
+export async function fetchMonitorDirectoryTreeBundle(
+  options?: FetchMonitorDirectoryTreeOptions,
+): Promise<MonitorDirectoryTreeBundle> {
+  const skipSync = options?.skipSync !== false;
   const [res, gbRes, nvrs] = await Promise.all([
-    getDirectoryMonitorTree(),
-    queryVideoList({ page: 1, count: 10000 }).catch(() => ({ data: [] as Record<string, any>[] })),
+    getDirectoryMonitorTree({ skipSync }),
+    queryAllVideoList().catch((e) => {
+      console.warn('拉取 WVP 国标设备列表失败，将仅使用目录树内国标数据', e);
+      return { data: [] as Record<string, any>[] };
+    }),
     fetchNvrListBrief().catch(() => [] as NvrInfo[]),
   ]);
   const rawTree = normalizeMonitorTreePayload(res);
@@ -67,8 +78,68 @@ export async function fetchMonitorDirectoryTreeBundle(): Promise<MonitorDirector
     wvpDevices,
   });
 
-  return { rawTree, wvpDevices, nvrs: nvrArr, treeItems, sipNameMap };
+  const bundle: MonitorDirectoryTreeBundle = {
+    rawTree,
+    wvpDevices,
+    nvrs: nvrArr,
+    treeItems,
+    sipNameMap,
+  };
+  setCachedMonitorDirectoryTreeBundle(bundle);
+  return bundle;
 }
+
+export interface LoadMonitorDirectoryTreeOptions {
+  /** 强制跳过缓存、重新拉取 */
+  force?: boolean;
+  skipSync?: boolean;
+  onBundle: (bundle: MonitorDirectoryTreeBundle, meta: { fromCache: boolean }) => void;
+  onError?: (error: unknown) => void;
+  onRefreshingChange?: (refreshing: boolean) => void;
+}
+
+/**
+ * 缓存优先加载：有缓存则立即回调 onBundle，再在后台静默刷新。
+ */
+export async function loadMonitorDirectoryTreeWithCache(
+  options: LoadMonitorDirectoryTreeOptions,
+): Promise<MonitorDirectoryTreeBundle | null> {
+  const { force, skipSync, onBundle, onError, onRefreshingChange } = options;
+
+  if (!force) {
+    const cached = getCachedMonitorDirectoryTreeBundle();
+    if (cached?.treeItems?.length) {
+      onBundle(cached, { fromCache: true });
+      onRefreshingChange?.(true);
+      try {
+        const fresh = await fetchMonitorDirectoryTreeBundle({ skipSync });
+        onBundle(fresh, { fromCache: false });
+        return fresh;
+      } catch (e) {
+        console.warn('后台刷新设备目录树失败', e);
+        onError?.(e);
+        return cached;
+      } finally {
+        onRefreshingChange?.(false);
+      }
+    }
+  }
+
+  onRefreshingChange?.(true);
+  try {
+    const bundle = await fetchMonitorDirectoryTreeBundle({ skipSync });
+    onBundle(bundle, { fromCache: false });
+    return bundle;
+  } catch (e) {
+    console.error('加载设备目录树失败', e);
+    onError?.(e);
+    return null;
+  } finally {
+    onRefreshingChange?.(false);
+  }
+}
+
+export { invalidateMonitorDirectoryTreeCache };
 
 export function mapMonitorTreeToDeviceDirectories(
   dirs: MonitorTreeDirectoryNode[],

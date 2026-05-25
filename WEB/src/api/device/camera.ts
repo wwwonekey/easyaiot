@@ -573,12 +573,18 @@ export const getDirectoryList = () => {
 
 /**
  * 获取分屏监控用目录设备树（目录 + 设备，单次请求）
+ * @param skipSync 为 true 时跳过服务端 WVP 全量同步（默认），加快首屏与后台刷新
  */
-export const getDirectoryMonitorTree = () => {
+export const getDirectoryMonitorTree = (options?: { skipSync?: boolean }) => {
   defHttp.setHeader({ 'X-Authorization': 'Bearer ' + localStorage.getItem('jwt_token') });
+  const skipSync = options?.skipSync !== false;
   return defHttp.get(
-    { url: `${CAMERA_PREFIX}/directory/monitor-tree`, timeout: 60 * 1000 },
-    { isTransformResponse: true },
+    {
+      url: `${CAMERA_PREFIX}/directory/monitor-tree`,
+      params: skipSync ? { skip_sync: 1 } : {},
+      timeout: 60 * 1000,
+    },
+    { isTransformResponse: true, errorMessageMode: 'none' },
   );
 };
 

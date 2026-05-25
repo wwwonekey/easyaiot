@@ -85,24 +85,19 @@ import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { Icon } from '@/components/Icon'
 import { BasicTree } from '@/components/Tree'
 import type { TreeItem } from '@/components/Tree'
-import {
-  getDirectoryMonitorTree,
-  type MonitorTreeDeviceNode,
-} from '@/api/device/camera'
+import type { MonitorTreeDeviceNode } from '@/api/device/camera'
 import { formatCameraDeviceLabel, isGb28181Device } from '@/views/camera/utils/deviceLabel'
 import {
-  buildMonitorDirectoryTreeNodes,
   collectMonitorTreeExpandedKeys,
   countMonitorTreePlayableLeaves,
   findMonitorGbDeviceByChannel,
   findMonitorTreeNodeByKey,
 } from '@/views/camera/utils/monitorDeviceTree'
 import { buildWvpChannelTreeNodes, parseGbChannelKey, type GbChannelRef } from '@/views/camera/utils/gb28181Tree'
-import { getDeviceChannels, queryAllVideoList } from '@/api/device/gb28181'
-import { fetchNvrListBrief } from '@/views/camera/utils/nvrDeviceGroup'
-import { buildMonitorTreeOptionsFromNvrList } from '@/views/camera/utils/monitorDeviceTree'
+import { getDeviceChannels } from '@/api/device/gb28181'
+import { getCachedMonitorDirectoryTreeBundle } from '@/views/camera/utils/monitorDirectoryTreeCache'
+import { loadMonitorDirectoryTreeWithCache } from '@/views/camera/utils/monitorDirectoryTreeLoad'
 import {
-  buildGbSipNameMap,
   enrichWvpChannelTreeNodes,
   resolveMonitorGbChannelDisplayName,
 } from '@/views/camera/utils/monitorGbDisplay'
@@ -173,33 +168,27 @@ const onLoadGbDeviceChannels: TreeProps['loadData'] = (treeNode) => {
 }
 
 const loadTreeData = async () => {
-  try {
-    loading.value = true
-    const [res, gbRes, nvrs] = await Promise.all([
-      getDirectoryMonitorTree(),
-      queryAllVideoList(),
-      fetchNvrListBrief(),
-    ])
-    const payload = res?.code !== undefined ? res.data : res
-    const tree = payload?.tree ?? []
-    const wvpDevices = gbRes?.data ?? []
-    const sipNameMap = buildGbSipNameMap(wvpDevices)
-    const { nvrNameMap, nvrs: nvrList } = buildMonitorTreeOptionsFromNvrList(nvrs)
-    treeData.value = buildMonitorDirectoryTreeNodes(tree, {
-      showDeviceCountInTitle: false,
-      sipNameMap,
-      nvrNameMap,
-      nvrs: nvrList,
-      wvpDevices,
-    })
-    expandedKeys.value = collectMonitorTreeExpandedKeys(treeData.value)
-  } catch (error) {
-    console.error('加载设备目录失败', error)
-    createMessage.error('加载设备目录失败: ' + (error as Error).message)
-    treeData.value = []
-  } finally {
-    loading.value = false
-  }
+  const hasCache = !!getCachedMonitorDirectoryTreeBundle()?.treeItems?.length
+  if (!hasCache) loading.value = true
+
+  await loadMonitorDirectoryTreeWithCache({
+    skipSync: true,
+    onBundle: (bundle) => {
+      treeData.value = bundle.treeItems
+      expandedKeys.value = collectMonitorTreeExpandedKeys(treeData.value)
+    },
+    onError: (error) => {
+      console.error('加载设备目录失败', error)
+      if (!treeData.value.length) {
+        createMessage.error('加载设备目录失败: ' + (error as Error)?.message)
+        treeData.value = []
+      }
+    },
+    onRefreshingChange: (v) => {
+      if (!treeData.value.length) loading.value = v
+    },
+  })
+  loading.value = false
 }
 
 // 加载统计数据

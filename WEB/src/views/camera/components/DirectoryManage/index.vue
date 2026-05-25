@@ -6,6 +6,12 @@
         <div class="sidebar-tree">
           <div class="tree-header">
             <div class="tree-header-button">
+              <a-button :loading="treeLoading || treeRefreshing" @click="handleRefreshTree">
+                <template #icon>
+                  <Icon icon="ant-design:reload-outlined" />
+                </template>
+                刷新
+              </a-button>
               <a-button type="primary" @click="handleAddDirectory">
                 <template #icon>
                   <PlusOutlined />
@@ -190,11 +196,14 @@ import {
   collectMonitorTreeExpandedKeys,
   parseMonitorDirectoryId,
 } from '@/views/camera/utils/monitorDeviceTree';
+import { getCachedMonitorDirectoryTreeBundle } from '@/views/camera/utils/monitorDirectoryTreeCache';
 import {
   buildDirectoryDevicesForTable,
-  fetchMonitorDirectoryTreeBundle,
   findMonitorDirectoryNode,
+  invalidateMonitorDirectoryTreeCache,
+  loadMonitorDirectoryTreeWithCache,
   mapMonitorTreeToDeviceDirectories,
+  type MonitorDirectoryTreeBundle,
 } from '@/views/camera/utils/monitorDirectoryTreeLoad';
 
 const props = withDefaults(
@@ -219,6 +228,8 @@ const selectedDirectoryName = ref<string>('');
 const directoryTree = ref<DeviceDirectory[]>([]);
 const syncCamerasLoading = ref(false);
 const treeLoading = ref(false);
+/** 有缓存时后台静默刷新 */
+const treeRefreshing = ref(false);
 const monitorTreeRaw = ref<MonitorTreeDirectoryNode[]>([]);
 const monitorTreeItems = ref<TreeItem[]>([]);
 const monitorWvpDevices = ref<Record<string, any>[]>([]);
@@ -234,7 +245,7 @@ const selectedDirectoryIsDefault = computed(() => {
 // 设备流状态映射
 const deviceStreamStatuses = ref<Record<string, string>>({});
 /** 与 monitor-tree 一并缓存的 NVR 元数据 */
-let cachedMonitorBundle: Awaited<ReturnType<typeof fetchMonitorDirectoryTreeBundle>> | null = null;
+let cachedMonitorBundle: MonitorDirectoryTreeBundle | null = null;
 
 // 查找默认分组（根级）
 const findDefaultDirectory = (nodes: DeviceDirectory[]): DeviceDirectory | null => {
@@ -298,42 +309,70 @@ function handleMonitorTreeSelect(keys: string[]) {
   selectDirectoryById(dir.id, dir.name);
 }
 
-/** 与分屏监控一致：monitor-tree + WVP 国标 + NVR */
-const loadDirectoryList = async () => {
-  try {
-    treeLoading.value = true;
-    const bundle = await fetchMonitorDirectoryTreeBundle();
-    cachedMonitorBundle = bundle;
-    monitorTreeRaw.value = bundle.rawTree;
-    monitorTreeItems.value = bundle.treeItems;
-    monitorWvpDevices.value = bundle.wvpDevices;
-    directoryTree.value = mapMonitorTreeToDeviceDirectories(bundle.rawTree);
+function applyMonitorBundle(bundle: MonitorDirectoryTreeBundle) {
+  cachedMonitorBundle = bundle;
+  monitorTreeRaw.value = bundle.rawTree;
+  monitorTreeItems.value = bundle.treeItems;
+  monitorWvpDevices.value = bundle.wvpDevices;
+  directoryTree.value = mapMonitorTreeToDeviceDirectories(bundle.rawTree);
+  treeExpandedKeys.value = collectMonitorTreeExpandedKeys(bundle.treeItems);
+}
 
-    const isInitialLoad = !selectedDirectoryId.value;
-    const defaultDir = findDefaultDirectory(directoryTree.value);
-    treeExpandedKeys.value = collectMonitorTreeExpandedKeys(bundle.treeItems);
-
-    if (isInitialLoad && defaultDir) {
+function afterMonitorBundleLoaded(bundle: MonitorDirectoryTreeBundle) {
+  const isInitialLoad = !selectedDirectoryId.value;
+  const defaultDir = findDefaultDirectory(directoryTree.value);
+  if (isInitialLoad && defaultDir) {
+    selectDirectoryById(defaultDir.id, defaultDir.name);
+  } else if (selectedDirectoryId.value) {
+    const still = findMonitorDirectoryNode(bundle.rawTree, selectedDirectoryId.value);
+    if (still) {
+      selectedDirectoryName.value = still.name;
+      treeSelectedKeys.value = [`dir_${still.id}`];
+    } else if (defaultDir) {
       selectDirectoryById(defaultDir.id, defaultDir.name);
-    } else if (selectedDirectoryId.value) {
-      const still = findMonitorDirectoryNode(bundle.rawTree, selectedDirectoryId.value);
-      if (still) {
-        selectedDirectoryName.value = still.name;
-        treeSelectedKeys.value = [`dir_${still.id}`];
-      } else if (defaultDir) {
-        selectDirectoryById(defaultDir.id, defaultDir.name);
-      }
-      reloadDeviceTable();
     }
-  } catch (error) {
-    console.error('加载设备目录树失败', error);
-    directoryTree.value = [];
-    monitorTreeItems.value = [];
-    monitorTreeRaw.value = [];
-  } finally {
-    treeLoading.value = false;
+    reloadDeviceTable();
   }
+}
+
+/** 与分屏监控一致：缓存优先 + 后台刷新 */
+const loadDirectoryList = async (options?: { force?: boolean }) => {
+  const hasCache =
+    !options?.force && !!getCachedMonitorDirectoryTreeBundle()?.treeItems?.length;
+  if (!hasCache) treeLoading.value = true;
+
+  await loadMonitorDirectoryTreeWithCache({
+    force: options?.force,
+    skipSync: true,
+    onBundle: (bundle) => {
+      applyMonitorBundle(bundle);
+      if (!selectedDirectoryId.value) {
+        afterMonitorBundleLoaded(bundle);
+      } else {
+        reloadDeviceTable();
+      }
+    },
+    onError: (error) => {
+      console.error('加载设备目录树失败', error);
+      if (!monitorTreeItems.value.length) {
+        directoryTree.value = [];
+        monitorTreeItems.value = [];
+        monitorTreeRaw.value = [];
+      }
+      treeLoading.value = false;
+    },
+    onRefreshingChange: (v) => {
+      treeRefreshing.value = v;
+      if (!hasCache && !v) treeLoading.value = false;
+    },
+  });
+  if (!hasCache) treeLoading.value = false;
 };
+
+/** 仅刷新目录树（不触发国标全量同步，与分屏监控左侧「刷新」区分） */
+function handleRefreshTree() {
+  loadDirectoryList({ force: true });
+}
 
 function findDirectoryMeta(directoryId: number, nodes: DeviceDirectory[] = directoryTree.value): DeviceDirectory | null {
   for (const node of nodes) {
@@ -373,7 +412,8 @@ const handleDeleteDirectory = async (directory: DeviceDirectory) => {
     const result = response.code !== undefined ? response : { code: 0, msg: '删除成功' };
     if (result.code === 0) {
       createMessage.success('删除成功');
-      loadDirectoryList();
+      invalidateMonitorDirectoryTreeCache();
+      loadDirectoryList({ force: true });
       // 如果删除的是当前选中的目录，清空选择
       if (selectedDirectoryId.value === directory.id) {
         selectedDirectoryId.value = null;
@@ -671,7 +711,8 @@ const handleMoveToDirectory = (record: DeviceInfo) => {
 const handleMoveDevicesSuccess = () => {
   checkedKeys.value = [];
   checkedRows.value = [];
-  loadDirectoryList();
+  invalidateMonitorDirectoryTreeCache();
+  loadDirectoryList({ force: true });
   if (selectedDirectoryId.value) {
     reloadDeviceTable();
   }
@@ -757,10 +798,8 @@ const handleUnbindNvrGroupDirectory = async (channels: DeviceInfo[]) => {
         content: `已将 ${channels.length} 个通道移回默认分组`,
         key: 'unbind-nvr',
       });
-      loadDirectoryList();
-      if (selectedDirectoryId.value) {
-        reloadDeviceTable();
-      }
+      invalidateMonitorDirectoryTreeCache();
+      loadDirectoryList({ force: true });
     }
   } catch (error) {
     console.error('NVR 通道移回默认分组失败', error);
@@ -776,7 +815,8 @@ const handleUnbindDirectory = async (record: DeviceInfo) => {
     const result = response.code !== undefined ? response : { code: 0, msg: '已移回默认分组' };
     if (result.code === 0) {
       createMessage.success({ content: '已移回默认分组', key: 'unbind' });
-      reloadDeviceTable();
+      invalidateMonitorDirectoryTreeCache();
+      await loadDirectoryList({ force: true });
     } else {
       createMessage.error({ content: result.msg || '解除关联失败', key: 'unbind' });
     }
@@ -852,8 +892,9 @@ const handleSyncCameras = async () => {
     }
 
     createMessage.success({ content: parts.join('；'), key: 'sync-cameras' });
+    invalidateMonitorDirectoryTreeCache();
     cachedMonitorBundle = null;
-    await loadDirectoryList();
+    await loadDirectoryList({ force: true });
     if (selectedDirectoryId.value) {
       reloadDeviceTable();
     }
@@ -876,8 +917,9 @@ const handleOpenJsonEditor = () => {
 
 // 目录操作成功回调
 const handleDirectorySuccess = () => {
+  invalidateMonitorDirectoryTreeCache();
   cachedMonitorBundle = null;
-  loadDirectoryList();
+  loadDirectoryList({ force: true });
   if (selectedDirectoryId.value) {
     reloadDeviceTable();
   }
@@ -888,12 +930,10 @@ const emit = defineEmits(['view', 'edit', 'delete', 'play', 'toggleStream']);
 
 // 暴露刷新方法
 defineExpose({
-  refresh: () => {
-    loadDirectoryList();
-    if (selectedDirectoryId.value) {
-      reloadDeviceTable();
-    }
-  },
+  /** 缓存优先刷新（Tab 切回、父级 refresh 调用） */
+  refresh: () => loadDirectoryList(),
+  /** 强制拉取最新目录树 */
+  forceRefreshTree: () => loadDirectoryList({ force: true }),
 });
 
 // 组件挂载时加载目录列表

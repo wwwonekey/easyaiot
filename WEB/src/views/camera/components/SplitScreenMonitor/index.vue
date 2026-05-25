@@ -21,13 +21,14 @@
     </div>
 
     <DirectoryManage
-      v-if="viewMode === 'config'"
+      v-if="directoryMounted"
+      v-show="viewMode === 'config'"
       ref="directoryManageRef"
       embedded
       @play="(record) => emit('play', record)"
     />
 
-    <MonitorPanel v-if="viewMode === 'monitor'" ref="monitorPanelRef" />
+    <MonitorPanel v-if="monitorMounted" v-show="viewMode === 'monitor'" ref="monitorPanelRef" />
   </div>
 </template>
 
@@ -54,8 +55,16 @@ const emit = defineEmits<{
 }>();
 
 const viewMode = ref<'config' | 'monitor'>(props.initialMode);
+/** 懒挂载：首次进入对应 Tab 再创建子组件，之后 v-show 保留状态与缓存 */
+const directoryMounted = ref(props.initialMode === 'config');
+const monitorMounted = ref(props.initialMode !== 'config');
 const directoryManageRef = ref<InstanceType<typeof DirectoryManage>>();
 const monitorPanelRef = ref<InstanceType<typeof MonitorPanel>>();
+
+watch(viewMode, (mode) => {
+  if (mode === 'config') directoryMounted.value = true;
+  else monitorMounted.value = true;
+});
 
 watch(
   () => props.initialMode,
@@ -65,11 +74,7 @@ watch(
 );
 
 function handleModeChange() {
-  if (viewMode.value === 'monitor') {
-    monitorPanelRef.value?.refresh?.();
-  } else {
-    directoryManageRef.value?.refresh?.();
-  }
+  // 两 Tab 共享 session 缓存，切换时不重复拉取（子组件首次挂载时已 load）
 }
 
 function refresh() {
@@ -80,12 +85,21 @@ function refresh() {
   }
 }
 
+/** 手动全量同步（含国标入库） */
+function forceRefresh() {
+  if (viewMode.value === 'monitor') {
+    monitorPanelRef.value?.forceRefresh?.();
+  } else {
+    directoryManageRef.value?.forceRefreshTree?.();
+  }
+}
+
 function setMode(mode: 'config' | 'monitor') {
   viewMode.value = mode;
   handleModeChange();
 }
 
-defineExpose({ refresh, setMode });
+defineExpose({ refresh, softRefresh: refresh, forceRefresh, setMode });
 </script>
 
 <style lang="less" scoped>

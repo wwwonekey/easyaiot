@@ -11,7 +11,7 @@
           </template>
           <template #action="{ expand, onClick }">
             <div class="tree-header-actions">
-              <a-button :loading="treeLoading" @click.stop="handleRefresh">
+              <a-button :loading="treeLoading || treeRefreshing" @click.stop="handleRefresh">
                 <template #icon>
                   <Icon icon="ant-design:reload-outlined" />
                 </template>
@@ -179,7 +179,12 @@ import {
   enrichWvpChannelTreeNodes,
   resolveMonitorGbChannelDisplayName,
 } from '@/views/camera/utils/monitorGbDisplay';
-import { fetchMonitorDirectoryTreeBundle } from '@/views/camera/utils/monitorDirectoryTreeLoad';
+import { getCachedMonitorDirectoryTreeBundle } from '@/views/camera/utils/monitorDirectoryTreeCache';
+import {
+  invalidateMonitorDirectoryTreeCache,
+  loadMonitorDirectoryTreeWithCache,
+  type MonitorDirectoryTreeBundle,
+} from '@/views/camera/utils/monitorDirectoryTreeLoad';
 import type { TreeProps } from 'ant-design-vue';
 import { useMessage } from '@/hooks/web/useMessage';
 import Jessibuca from '@/components/Player/module/jessibuca.vue';
@@ -199,6 +204,8 @@ const selectedKeys = ref<string[]>([]);
 const expandedKeys = ref<string[]>([]);
 const treeData = ref<TreeItem[]>([]);
 const treeLoading = ref(false);
+/** 有缓存时后台静默刷新 */
+const treeRefreshing = ref(false);
 const playerRefs = ref<any[]>([]);
 
 const state = reactive({
@@ -396,30 +403,43 @@ const onLoadGbDeviceChannels: TreeProps['loadData'] = (treeNode) => {
   });
 };
 
-/** 目录 + NVR 元数据 + WVP 国标设备列表；国标通道展开时再按需请求 WVP */
-async function fetchMonitorTree() {
-  const bundle = await fetchMonitorDirectoryTreeBundle();
+function applyMonitorTreeBundle(bundle: MonitorDirectoryTreeBundle) {
   treeData.value = bundle.treeItems;
   expandedKeys.value = collectMonitorTreeExpandedKeys(treeData.value);
 }
 
-async function loadMonitorTree() {
-  try {
-    treeLoading.value = true;
-    await fetchMonitorTree();
-  } catch (e) {
-    console.error(e);
-    createMessage.error('加载设备目录树失败');
-    treeData.value = [];
-  } finally {
-    treeLoading.value = false;
-  }
+/** 缓存优先加载；国标通道展开时再按需请求 WVP */
+async function loadMonitorTree(options?: { force?: boolean }) {
+  const hasCache = !options?.force && !!getCachedMonitorDirectoryTreeBundle()?.treeItems?.length;
+  if (!hasCache) treeLoading.value = true;
+  await loadMonitorDirectoryTreeWithCache({
+    force: options?.force,
+    skipSync: true,
+    onBundle: (bundle) => {
+      applyMonitorTreeBundle(bundle);
+    },
+    onRefreshingChange: (v) => {
+      treeRefreshing.value = v;
+      if (hasCache) return;
+      if (!v) treeLoading.value = false;
+    },
+    onError: (e) => {
+      if (!treeData.value.length) {
+        console.error(e);
+        createMessage.error('加载设备目录树失败');
+        treeData.value = [];
+      }
+      treeLoading.value = false;
+    },
+  });
+  if (!hasCache) treeLoading.value = false;
 }
 
 /** 同步国标设备并刷新目录树 */
 async function handleRefresh() {
   try {
     treeLoading.value = true;
+    invalidateMonitorDirectoryTreeCache();
     try {
       const { channels } = await collectWvpGbChannelsForSync();
       const payload = await syncGb28181Devices(channels);
@@ -439,11 +459,11 @@ async function handleRefresh() {
       console.error(e);
       createMessage.error('同步国标设备失败，请检查 WVP 服务与网络');
     }
-    await fetchMonitorTree();
+    await loadMonitorTree({ force: true });
   } catch (e) {
     console.error(e);
     createMessage.error('加载设备目录树失败');
-    treeData.value = [];
+    if (!treeData.value.length) treeData.value = [];
   } finally {
     treeLoading.value = false;
   }
@@ -652,7 +672,7 @@ onUnmounted(() => {
   playerRefs.value.forEach((p) => p?.destroy?.());
 });
 
-defineExpose({ refresh: handleRefresh });
+defineExpose({ refresh: () => loadMonitorTree(), forceRefresh: handleRefresh });
 </script>
 
 <style lang="less" scoped>

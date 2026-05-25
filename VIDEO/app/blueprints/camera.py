@@ -2311,10 +2311,13 @@ def get_directory_monitor_tree():
         from app.services.nvr_service import build_nvr_ip_index
 
         ensure_directory_layout()
-        try:
-            sync_gb28181_channels_to_devices(strict=False)
-        except Exception as e:
-            logger.warning(f'分屏监控树加载前国标同步失败: {e}')
+        # 默认跳过 WVP 全量同步，避免设备多时接口超时；手动「刷新」走 sync-gb28181
+        skip_sync = request.args.get('skip_sync', '1').lower() in ('1', 'true', 'yes')
+        if not skip_sync:
+            try:
+                sync_gb28181_channels_to_devices(strict=False)
+            except Exception as e:
+                logger.warning(f'分屏监控树加载前国标同步失败: {e}')
         nvr_by_ip = build_nvr_ip_index()
 
         def build_tree(parent_id=None):

@@ -23,6 +23,7 @@ const commonApi = (method: 'get' | 'post' | 'delete' | 'put', url: string, param
     {
       url,
       ...(isGet || isDelete ? { params } : { data: params }),
+      ...(isGet && url.includes('/devices') ? { timeout: 60 * 1000 } : {}),
     },
     {
       isTransformResponse,
