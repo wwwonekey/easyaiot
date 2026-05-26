@@ -44,6 +44,6 @@ public interface DeviceMobilePositionMapper {
             "#{item.reportSource}, #{item.createTime}) " +
             "</foreach> " +
             "</script>")
-    void batchadd(List<MobilePosition> mobilePositions);
+    void batchadd(@Param("mobilePositions") List<MobilePosition> mobilePositions);
 
 }

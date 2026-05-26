@@ -1,11 +1,11 @@
-# syntax=docker/dockerfile:1.4
+# BuildKit 内置前端，支持 RUN --mount
 # 第一阶段：Maven 只执行一次 package（勿拆成 go-offline + clean package，否则会编译两遍）
-# 依赖缓存：宿主机 .build-cache/m2/repository（bind mount）
-# 产物：install_linux.sh 提取到 ./target/jars
+# 依赖缓存：宿主机目录挂载到 /m2/host-cache（读写）；mvn 结束后 cp 到 /m2/repository 写入镜像层，供 install_linux.sh docker cp 回宿主机
+# 产物：install_linux.sh 从 builder 阶段提取 ./target/jars
 
 FROM maven:3.9.11-eclipse-temurin-21-alpine AS builder
 
-RUN mkdir -p /m2/repository && \
+RUN mkdir -p /m2/host-cache /m2/repository && \
     cat > /m2/settings.xml <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
@@ -19,12 +19,13 @@ RUN mkdir -p /m2/repository && \
       <url>https://maven.aliyun.com/repository/public</url>
     </mirror>
   </mirrors>
-  <localRepository>/m2/repository</localRepository>
+  <localRepository>/m2/host-cache</localRepository>
   <interactiveMode>false</interactiveMode>
 </settings>
 EOF
 
-ENV MAVEN_CONFIG=/m2/settings.xml
+# MAVEN_CONFIG 必须是目录（内含 settings.xml），不能指向文件；否则 mvn 会落到 /root/.m2/repository，宿主机缓存无效
+ENV MAVEN_CONFIG=/m2
 
 WORKDIR /build
 
@@ -45,13 +46,17 @@ COPY iot-gb28181/pom.xml ./iot-gb28181/
 
 COPY . .
 
-# maven-repo 由 install_linux.sh 传入：docker build --build-context maven-repo=.build-cache/m2/repository
-RUN --mount=type=bind,from=maven-repo,source=.,target=/m2/repository,rw \
-    mvn -B package \
+# maven-repo 由 install_linux.sh 传入：docker build --build-context maven-repo=<项目根>/.build-cache/device/m2/repository
+# bind mount 内容不会进入镜像层，须在同一个 RUN 内 cp 到 /m2/repository
+RUN --mount=type=bind,from=maven-repo,source=.,target=/m2/host-cache,rw \
+    mvn -s /m2/settings.xml -B package \
+    -Dmaven.repo.local=/m2/host-cache \
     -DskipTests \
     -Dmaven.test.skip=true \
     -Dcheckstyle.skip=true \
-    -Drevision=1.0.0
+    -Drevision=1.0.0 && \
+    cp -a /m2/host-cache/. /m2/repository/ && \
+    test -d /m2/repository/com || (echo "Maven 本地仓库为空，请检查 MAVEN_CONFIG/localRepository" && exit 1)
 
 RUN mkdir -p /target/jars && \
     if [ -f /build/iot-gateway/target/iot-gateway.jar ]; then \

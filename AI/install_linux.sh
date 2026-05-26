@@ -34,6 +34,8 @@ cd "$SCRIPT_DIR"
 EASYAIOT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # shellcheck source=../.scripts/docker/init-build-cache-dirs.sh
 source "${EASYAIOT_ROOT}/.scripts/docker/init-build-cache-dirs.sh"
+# shellcheck source=../.scripts/docker/gpu_compose_helpers.sh
+source "${EASYAIOT_ROOT}/.scripts/docker/gpu_compose_helpers.sh"
 
 AUTO_LABELING_DIR="$SCRIPT_DIR/services/auto-labeling"
 
@@ -54,32 +56,33 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-prepare_cached_resources() {
-    init_project_build_cache_dirs "$SCRIPT_DIR"
-    local wheels="${SCRIPT_DIR}/.build-cache/pip-wheels"
-    local cache_script="${SCRIPT_DIR}/cache_resources.sh"
+prepare_cached_resources_for_module() {
+    local module="$1"
+    init_easyaiot_build_cache_dirs "$EASYAIOT_ROOT"
+    local wheels
+    wheels="$(pip_wheels_build_context_dir_for "$EASYAIOT_ROOT" "$module")"
+    local cache_script="${EASYAIOT_ROOT}/.scripts/docker/cache_python_resources.sh"
     if find "$wheels" -maxdepth 1 -type f 2>/dev/null | grep -q .; then
-        print_success "检测到 pip-wheels: $wheels"
+        print_success "检测到 [${module}] pip-wheels: $wheels"
         return 0
     fi
     if [ "${AUTO_CACHE_PIP:-1}" = "1" ] && [ -f "$cache_script" ]; then
-        print_warning "首次需预下载 pip 离线包（约 2–5GB），可能需要 10–30 分钟，进度如下..."
-        BASE_IMAGE="${BASE_IMAGE:-pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel}" "$cache_script" || \
-            BASE_IMAGE="${BASE_IMAGE:-pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel}" /bin/bash "$cache_script" || true
+        print_warning "[${module}] 首次需预下载 pip 离线包，可能需要 10–30 分钟..."
+        BASE_IMAGE="${BASE_IMAGE:-pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel}" \
+            AUTO_LABELING_BASE_IMAGE="${AUTO_LABELING_BASE_IMAGE:-pytorch/pytorch:2.9.0-cuda12.8-cudnn9-runtime}" \
+            "$cache_script" "$module" || \
+            BASE_IMAGE="${BASE_IMAGE:-pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel}" \
+            AUTO_LABELING_BASE_IMAGE="${AUTO_LABELING_BASE_IMAGE:-pytorch/pytorch:2.9.0-cuda12.8-cudnn9-runtime}" \
+            /bin/bash "$cache_script" "$module" || true
     fi
 }
 
+prepare_cached_resources() {
+    prepare_cached_resources_for_module "ai"
+}
+
 prepare_auto_labeling_cached_resources() {
-    init_project_build_cache_dirs "$AUTO_LABELING_DIR"
-    local wheels="${AUTO_LABELING_DIR}/.build-cache/pip-wheels"
-    local cache_script="${AUTO_LABELING_DIR}/cache_resources.sh"
-    if find "$wheels" -maxdepth 1 -type f 2>/dev/null | grep -q .; then
-        return 0
-    fi
-    if [ "${AUTO_CACHE_PIP:-1}" = "1" ] && [ -f "$cache_script" ]; then
-        print_info "预下载标注平台 pip 离线包（进度如下）..."
-        "$cache_script" || /bin/bash "$cache_script" || true
-    fi
+    prepare_cached_resources_for_module "auto-labeling"
 }
 
 build_with_cache() {
@@ -88,17 +91,19 @@ build_with_cache() {
     local build_status=0
     local platform_opts=""
 
-    init_project_build_cache_dirs "$SCRIPT_DIR"
+    init_easyaiot_build_cache_dirs "$EASYAIOT_ROOT"
     enable_docker_buildkit
     if [ -n "${DOCKER_PLATFORM:-}" ]; then
         platform_opts="--platform $DOCKER_PLATFORM"
     fi
 
-    print_info "docker build（.build-cache pip-cache/pip-wheels，--build-context pip-cache）..."
+    prepare_cached_resources
+    print_info "docker build（.build-cache/ai pip-cache/pip-wheels）..."
     set +e
     docker build \
         --build-arg BASE_IMAGE="${BASE_IMAGE:-pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel}" \
-        --build-context "pip-cache=$(pip_cache_build_context_dir "$SCRIPT_DIR")" \
+        --build-context "pip-cache=$(pip_cache_build_context_dir_for "$EASYAIOT_ROOT" ai)" \
+        --build-context "pip-wheels=$(pip_wheels_build_context_dir_for "$EASYAIOT_ROOT" ai)" \
         --target runtime \
         $platform_opts \
         -t ai-service:latest \
@@ -124,14 +129,17 @@ build_auto_labeling_with_cache() {
     local build_log="/tmp/docker_build_auto_labeling_$$.log"
     local build_status=0
 
-    init_project_build_cache_dirs "$AUTO_LABELING_DIR"
+    init_easyaiot_build_cache_dirs "$EASYAIOT_ROOT"
     enable_docker_buildkit
     prepare_auto_labeling_cached_resources
 
-    print_info "构建标注平台（.build-cache，--build-context pip-cache）..."
+    print_info "构建标注平台（.build-cache/auto-labeling pip-cache/pip-wheels）..."
     set +e
     docker build \
-        --build-context "pip-cache=$(pip_cache_build_context_dir "$AUTO_LABELING_DIR")" \
+        --build-arg BASE_IMAGE="${AUTO_LABELING_BASE_IMAGE:-pytorch/pytorch:2.9.0-cuda12.8-cudnn9-runtime}" \
+        --build-context "pip-cache=$(pip_cache_build_context_dir_for "$EASYAIOT_ROOT" auto-labeling)" \
+        --build-context "pip-wheels=$(pip_wheels_build_context_dir_for "$EASYAIOT_ROOT" auto-labeling)" \
+        --target runtime \
         -t auto-labeling:latest \
         --pull=false \
         --build-arg OFFLINE_MODE=${OFFLINE_MODE:-0} \
@@ -473,22 +481,7 @@ check_gpu() {
 
 # 配置 GPU 支持（如果可用）
 configure_gpu() {
-    if [ "$GPU_AVAILABLE" = true ]; then
-        print_info "启用 GPU 支持..."
-        # 取消注释 GPU 配置（从 "# deploy:" 到 "#           capabilities: [gpu]"）
-        if grep -q "^    # deploy:" docker-compose.yaml; then
-            # 使用 sed 取消注释 GPU 配置部分（移除行首的 "    # "）
-            sed -i '/^    # deploy:/,/^    #           capabilities: \[gpu\]/s/^    # /    /' docker-compose.yaml
-            print_success "GPU 配置已启用"
-        fi
-    else
-        print_info "使用 CPU 模式（GPU 配置已禁用）"
-        # 确保 GPU 配置被注释（如果未被注释，则注释掉）
-        if grep -q "^    deploy:" docker-compose.yaml && ! grep -q "^    # deploy:" docker-compose.yaml; then
-            # 使用 sed 注释掉 GPU 配置部分（在行首添加 "    # "）
-            sed -i '/^    deploy:/,/^           capabilities: \[gpu\]/s/^    /    # /' docker-compose.yaml
-        fi
-    fi
+    configure_compose_gpu "docker-compose.yaml" ".env.docker"
 }
 
 # 检查并创建 Docker 网络
@@ -840,23 +833,32 @@ build_image() {
 
 # 清理服务
 clean_service() {
-    print_warning "这将删除容器、镜像和数据卷，确定要继续吗？(y/N)"
-    read -r response
-    
-    if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
-        check_docker
-        check_docker_compose
-        print_info "停止并删除容器..."
+    if [ "${EASYAIOT_AUTO_YES:-}" != "1" ]; then
+        print_warning "这将删除容器、镜像和数据卷，确定要继续吗？"
+        local response
+        while true; do
+            read -r -p "确认继续? [y/n] " response
+            case "$(echo "$response" | tr '[:upper:]' '[:lower:]')" in
+                y|yes) break ;;
+                n|no|'')
+                    print_info "已取消清理操作"
+                    return
+                    ;;
+                *) echo "请输入 y/yes 或 n/no" ;;
+            esac
+        done
+    fi
+
+    check_docker
+    check_docker_compose
+    print_info "停止并删除容器..."
         $COMPOSE_CMD down -v --remove-orphans 2>&1 | grep -v "^Stopping\|^Removing\|^Network" || true
         
         print_info "删除镜像..."
         docker rmi ai-service:latest >/dev/null 2>&1 || true
         docker rmi auto-labeling:latest >/dev/null 2>&1 || true
         
-        print_success "清理完成"
-    else
-        print_info "已取消清理操作"
-    fi
+    print_success "清理完成"
 }
 
 # 更新服务

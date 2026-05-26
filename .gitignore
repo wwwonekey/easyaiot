@@ -83,9 +83,9 @@ hs_err_pid*
 # auto-labeling 标注数据目录（运行时用户数据）
 /AI/services/auto-labeling/static/annotations/
 
-# Docker 构建依赖宿主机缓存（pnpm / Maven / pip，由 install_linux*.sh 创建）
-**/.build-cache/*
-!**/.build-cache/README.md
+# Docker 构建依赖宿主机缓存（项目根 .build-cache，由 install_linux*.sh 创建）
+.build-cache/**
+!.build-cache/README.md
 
 # CMake 构建目录
 TASK/build-linux/

@@ -52,6 +52,24 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# compose 文件中定义的服务数量（用于启动前提示）
+compose_service_count() {
+    $DOCKER_COMPOSE -f "$COMPOSE_FILE" config --services 2>/dev/null | wc -l | tr -d '[:space:]'
+}
+
+# 后台启动 compose 服务。
+# TTY 下 compose 会用 \r 刷新 [+] up x/y，分母残留时易显示成 9/100（实际共 10 个服务）。
+compose_up_detached() {
+    local count
+    count=$(compose_service_count)
+    if [ -n "$count" ] && [ "$count" -gt 0 ] 2>/dev/null; then
+        print_info "正在启动服务（共 ${count} 个）..."
+    else
+        print_info "正在启动服务..."
+    fi
+    COMPOSE_ANSI=never $DOCKER_COMPOSE -f "$COMPOSE_FILE" up -d --no-color "$@"
+}
+
 # 检查docker-compose.yml是否存在
 check_compose_file() {
     if [ ! -f "$COMPOSE_FILE" ]; then
@@ -76,7 +94,7 @@ check_docker_daemon() {
 }
 
 JARS_DIR="${SCRIPT_DIR}/target/jars"
-MAVEN_CACHE_DIR="${SCRIPT_DIR}/.build-cache/m2/repository"
+MAVEN_CACHE_DIR="$(maven_repository_dir "$EASYAIOT_ROOT")"
 
 # 运行时镜像：dockerfile 路径 | 镜像 tag
 RUNTIME_IMAGE_SPECS=(
@@ -92,6 +110,20 @@ RUNTIME_IMAGE_SPECS=(
     "iot-gb28181/iot-gb28181-biz/Dockerfile|iot-gb28181-biz:latest"
 )
 
+# 与 RUNTIME_IMAGE_SPECS 中 COPY 的 Jar 一一对应
+REQUIRED_RUNTIME_JARS=(
+    iot-gateway.jar
+    iot-system-biz.jar
+    iot-infra-biz.jar
+    iot-device-biz.jar
+    iot-dataset-biz.jar
+    iot-tdengine-biz.jar
+    iot-file-biz.jar
+    iot-message-biz.jar
+    iot-sink-biz.jar
+    iot-gb28181-biz.jar
+)
+
 check_jars_exist() {
     if [ ! -d "$JARS_DIR" ]; then
         return 1
@@ -99,7 +131,23 @@ check_jars_exist() {
     find "$JARS_DIR" -maxdepth 1 -name "*.jar" -type f 2>/dev/null | grep -q .
 }
 
-# 第一阶段：Maven 只编译一次，依赖写入 .build-cache/m2/repository，Jar 提取到 target/jars
+# 第二阶段构建前检查，避免 Docker 日志里出现误导性的「错误: xxx.jar 不存在」RUN 步骤
+verify_runtime_jars() {
+    local missing=()
+    local jar
+    for jar in "${REQUIRED_RUNTIME_JARS[@]}"; do
+        if [ ! -f "${JARS_DIR}/${jar}" ]; then
+            missing+=("$jar")
+        fi
+    done
+    if [ "${#missing[@]}" -gt 0 ]; then
+        print_error "缺少运行时 Jar（共 ${#missing[@]} 个）: ${missing[*]}"
+        print_info "请先执行: ./install_linux.sh build-base"
+        exit 1
+    fi
+}
+
+# 第一阶段：Maven 只编译一次，依赖写入 .build-cache/device/m2/repository，Jar 提取到 target/jars
 build_base_jars() {
     local force="${1:-0}"
 
@@ -116,17 +164,24 @@ build_base_jars() {
     check_compose_file
     check_docker_daemon
     cd "$SCRIPT_DIR"
-    init_project_build_cache_dirs "$SCRIPT_DIR"
+    init_easyaiot_build_cache_dirs "$EASYAIOT_ROOT"
     enable_docker_buildkit
 
     mkdir -p "$JARS_DIR"
     print_info "Maven 本地仓库: $MAVEN_CACHE_DIR"
 
     mkdir -p "$MAVEN_CACHE_DIR"
-    print_info "构建 device-base-builder（mvn 仅执行一次，Maven 写入宿主机 m2）..."
+    print_info "构建 device-base-builder（mvn 仅执行一次）..."
+    # --target builder：mvn 结束后 Dockerfile.base 已将 host-cache 拷入镜像层 /m2/repository，再 docker cp 到宿主机
+    local docker_nocache=()
+    if [ ! -d "${MAVEN_CACHE_DIR}/com" ]; then
+        print_info "宿主机 Maven 缓存为空，本次禁用 Docker 层缓存（确保使用最新 Dockerfile.base）"
+        docker_nocache=(--no-cache)
+    fi
     if ! docker build \
+        "${docker_nocache[@]}" \
         -f Dockerfile.base \
-        --target output \
+        --target builder \
         -t device-base-builder:latest \
         --build-context "maven-repo=${MAVEN_CACHE_DIR}" \
         .; then
@@ -134,16 +189,7 @@ build_base_jars() {
         exit 1
     fi
 
-    local m2_kb
-    m2_kb=$(du -sk "$MAVEN_CACHE_DIR" 2>/dev/null | awk '{print $1}')
-    if [ -z "$m2_kb" ] || [ "$m2_kb" -lt 10240 ]; then
-        print_warning "Maven 缓存偏小（${m2_kb:-0}KB）: $MAVEN_CACHE_DIR"
-        print_info "若二次构建仍全量下载，请用 BuildKit 重建: ./install_linux.sh build-base"
-    else
-        print_success "Maven 依赖已缓存: $MAVEN_CACHE_DIR（约 $((m2_kb / 1024))MB）"
-    fi
-
-    print_info "提取 Jar 到 $JARS_DIR ..."
+    print_info "提取 Jar 与 Maven 缓存到宿主机 ..."
     local temp_container="device-base-builder-temp-$(date +%s)"
     if ! docker create --name "$temp_container" device-base-builder:latest >/dev/null 2>&1; then
         print_error "创建临时容器失败"
@@ -154,7 +200,27 @@ build_base_jars() {
         print_error "复制 Jar 失败"
         exit 1
     fi
+    # 优先 /m2/repository；旧镜像误配置时依赖在 /root/.m2/repository
+    if docker cp "${temp_container}:/m2/repository/." "$MAVEN_CACHE_DIR/" 2>/dev/null; then
+        :
+    elif docker cp "${temp_container}:/root/.m2/repository/." "$MAVEN_CACHE_DIR/" 2>/dev/null; then
+        print_warning "已从 /root/.m2/repository 回退导出 Maven 缓存（请用最新 Dockerfile.base 重建）"
+    else
+        docker rm -f "$temp_container" >/dev/null 2>&1 || true
+        print_error "复制 Maven 缓存失败"
+        exit 1
+    fi
     docker rm -f "$temp_container" >/dev/null 2>&1 || true
+
+    local m2_kb m2_sample
+    m2_kb=$(du -sk "$MAVEN_CACHE_DIR" 2>/dev/null | awk '{print $1}')
+    m2_sample=$(find "$MAVEN_CACHE_DIR" -mindepth 2 -maxdepth 3 -type d 2>/dev/null | head -1)
+    if [ -z "$m2_kb" ] || [ "$m2_kb" -lt 10240 ] || [ -z "$m2_sample" ]; then
+        print_warning "Maven 缓存偏小（${m2_kb:-0}KB）: $MAVEN_CACHE_DIR"
+        print_info "请无缓存重编: ./install_linux.sh build-base（需 BuildKit）"
+    else
+        print_success "Maven 依赖已缓存: $MAVEN_CACHE_DIR（约 $((m2_kb / 1024))MB）"
+    fi
 
     local jar_count=0
     while IFS= read -r jar_file; do
@@ -192,6 +258,7 @@ build_runtime_images() {
     check_compose_file
     check_docker_daemon
     cd "$SCRIPT_DIR"
+    verify_runtime_jars
 
     local spec dockerfile tag
     for spec in "${RUNTIME_IMAGE_SPECS[@]}"; do
@@ -315,7 +382,7 @@ build_and_start() {
     # 启动所有服务
     print_info "启动所有服务..."
     set +e  # 暂时关闭错误退出，以便捕获退出码
-    $DOCKER_COMPOSE up -d
+    compose_up_detached
     exit_code=$?
     set -e  # 重新开启错误退出
     
@@ -352,12 +419,7 @@ build_and_start() {
 start_services() {
     print_info "启动所有服务..."
     cd "$SCRIPT_DIR"
-    # 使用 --quiet-pull 减少拉取镜像时的输出
-    if echo "$DOCKER_COMPOSE" | grep -q "docker compose"; then
-        $DOCKER_COMPOSE up -d --quiet-pull 2>&1 | grep -E "(Creating|Starting|Started|ERROR|WARNING)" || true
-    else
-        $DOCKER_COMPOSE up -d 2>&1 | grep -E "(Creating|Starting|Started|ERROR|WARNING)" || true
-    fi
+    compose_up_detached --quiet-pull 2>&1 | grep -E "(Creating|Starting|Started|Healthy|ERROR|WARNING|Recreate)" || true
     print_success "服务启动完成"
 }
 
@@ -456,78 +518,92 @@ start_service() {
     fi
     print_info "启动服务: $service"
     cd "$SCRIPT_DIR"
-    $DOCKER_COMPOSE up -d "$service"
+    compose_up_detached "$service"
     print_success "服务 $service 启动完成"
 }
 
 # 清理（停止并删除容器）
 clean() {
-    print_warning "这将停止并删除所有容器，但保留镜像"
-    read -p "确认继续? (y/N): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        cd "$SCRIPT_DIR"
-        $DOCKER_COMPOSE down
-        print_success "容器清理完成"
-        
-        # 清理各模块 target 目录下的 .jar 包
-        print_info "清理各模块 target 目录下的 .jar 包..."
-        local modules=(
-            "iot-dataset"
-            "iot-device"
-            "iot-file"
-            "iot-gateway"
-            "iot-gb28181"
-            "iot-infra"
-            "iot-message"
-            "iot-sink"
-            "iot-system"
-            "iot-tdengine"
-        )
-        
-        local jar_count=0
-        for module in "${modules[@]}"; do
-            local module_path="${SCRIPT_DIR}/${module}"
-            if [ -d "$module_path" ]; then
-                # 查找并删除该模块下所有 target 目录中的 .jar 文件
-                local found_jars
-                found_jars=$(find "$module_path" -type f -name "*.jar" -path "*/target/*" 2>/dev/null || true)
-                if [ -n "$found_jars" ]; then
-                    while IFS= read -r jar_file; do
-                        if [ -f "$jar_file" ]; then
-                            rm -f "$jar_file"
-                            jar_count=$((jar_count + 1))
-                            print_info "已删除: $jar_file"
-                        fi
-                    done <<< "$found_jars"
-                fi
-            fi
+    if [ "${EASYAIOT_AUTO_YES:-}" != "1" ]; then
+        print_warning "这将停止并删除所有容器，但保留镜像"
+        local response
+        while true; do
+            read -r -p "确认继续? [y/n] " response
+            case "$(echo "$response" | tr '[:upper:]' '[:lower:]')" in
+                y|yes) break ;;
+                n|no|'')
+                    print_info "操作已取消"
+                    return
+                    ;;
+                *) echo "请输入 y/yes 或 n/no" ;;
+            esac
         done
-        
-        if [ "$jar_count" -gt 0 ]; then
-            print_success "已清理 $jar_count 个 .jar 文件"
-        else
-            print_info "未找到需要清理的 .jar 文件"
-        fi
-        
-        print_success "清理完成"
-    else
-        print_info "操作已取消"
     fi
+    cd "$SCRIPT_DIR"
+    $DOCKER_COMPOSE down
+    print_success "容器清理完成"
+
+    print_info "清理各模块 target 目录下的 .jar 包..."
+    local modules=(
+        "iot-dataset"
+        "iot-device"
+        "iot-file"
+        "iot-gateway"
+        "iot-gb28181"
+        "iot-infra"
+        "iot-message"
+        "iot-sink"
+        "iot-system"
+        "iot-tdengine"
+    )
+
+    local jar_count=0
+    for module in "${modules[@]}"; do
+        local module_path="${SCRIPT_DIR}/${module}"
+        if [ -d "$module_path" ]; then
+            local found_jars
+            found_jars=$(find "$module_path" -type f -name "*.jar" -path "*/target/*" 2>/dev/null || true)
+            if [ -n "$found_jars" ]; then
+                while IFS= read -r jar_file; do
+                    if [ -f "$jar_file" ]; then
+                        rm -f "$jar_file"
+                        jar_count=$((jar_count + 1))
+                        print_info "已删除: $jar_file"
+                    fi
+                done <<< "$found_jars"
+            fi
+        fi
+    done
+
+    if [ "$jar_count" -gt 0 ]; then
+        print_success "已清理 $jar_count 个 .jar 文件"
+    else
+        print_info "未找到需要清理的 .jar 文件"
+    fi
+
+    print_success "清理完成"
 }
 
 # 完全清理（包括镜像）
 clean_all() {
-    print_warning "这将停止并删除所有容器和镜像"
-    read -p "确认继续? (y/N): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        cd "$SCRIPT_DIR"
-        $DOCKER_COMPOSE down --rmi all
-        print_success "完全清理完成"
-    else
-        print_info "操作已取消"
+    if [ "${EASYAIOT_AUTO_YES:-}" != "1" ]; then
+        print_warning "这将停止并删除所有容器和镜像"
+        local response
+        while true; do
+            read -r -p "确认继续? [y/n] " response
+            case "$(echo "$response" | tr '[:upper:]' '[:lower:]')" in
+                y|yes) break ;;
+                n|no|'')
+                    print_info "操作已取消"
+                    return
+                    ;;
+                *) echo "请输入 y/yes 或 n/no" ;;
+            esac
+        done
     fi
+    cd "$SCRIPT_DIR"
+    $DOCKER_COMPOSE down --rmi all
+    print_success "完全清理完成"
 }
 
 # 更新服务（重新构建并重启）
@@ -545,7 +621,7 @@ update_services() {
     local exit_code
     
     # 强制重新创建并启动所有服务
-    $DOCKER_COMPOSE up -d --force-recreate
+    compose_up_detached --force-recreate
     exit_code=$?
     
     # 检查命令是否成功
@@ -576,7 +652,7 @@ DEVICE模块 Docker Compose 管理脚本
 用法: $0 [命令] [选项]
 
 构建流程（两阶段，与最初设计一致）:
-    1) Dockerfile.base：Maven 只编译一次，依赖缓存到 .build-cache/m2/repository，Jar 落到 target/jars
+    1) Dockerfile.base：Maven 只编译一次，依赖缓存到 .build-cache/device/m2/repository，Jar 落到 target/jars
     2) 各模块 Dockerfile：仅从 target/jars 打运行时镜像，不再执行 Maven
 
 命令:

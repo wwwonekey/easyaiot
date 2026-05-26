@@ -37,8 +37,7 @@ DOCKER_PLATFORM="linux/arm64"
 EASYAIOT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # shellcheck source=../.scripts/docker/init-build-cache-dirs.sh
 source "${EASYAIOT_ROOT}/.scripts/docker/init-build-cache-dirs.sh"
-BUILD_CACHE_DIR="${SCRIPT_DIR}/.build-cache"
-DOCKER_IMAGES_DIR="${BUILD_CACHE_DIR}/docker-images"
+BUILD_CACHE_DIR="$(easyaiot_build_cache_base "$EASYAIOT_ROOT")"
 
 # 打印带颜色的消息
 print_info() {
@@ -58,13 +57,14 @@ print_error() {
 }
 
 init_build_cache_dirs() {
-    init_project_build_cache_dirs "$SCRIPT_DIR"
+    init_easyaiot_build_cache_dirs "$EASYAIOT_ROOT"
 }
 
 prepare_cached_resources() {
-    init_project_build_cache_dirs "$SCRIPT_DIR"
+    init_easyaiot_build_cache_dirs "$EASYAIOT_ROOT"
     local cache_script="${SCRIPT_DIR}/cache_resources_arm.sh"
-    local wheels="${SCRIPT_DIR}/.build-cache/pip-wheels"
+    local wheels
+    wheels="$(arm_pip_wheels_build_context_dir_for "$EASYAIOT_ROOT" ai)"
 
     if find "$wheels" -maxdepth 1 -type f \( -name "*.whl" -o -name "*.tar.gz" -o -name "*.zip" \) 2>/dev/null | grep -q .; then
         print_success "检测到 pip-wheels: $wheels"
@@ -115,7 +115,8 @@ build_with_cache() {
         print_info "执行构建（第 ${attempt}/${max_retries} 次）..."
         set +e
         docker build \
-            --build-context "pip-cache=$(pip_cache_build_context_dir "$SCRIPT_DIR")" \
+            --build-context "pip-cache=$(pip_cache_build_context_dir_for "$EASYAIOT_ROOT" ai)" \
+            --build-context "pip-wheels=$(arm_pip_wheels_build_context_dir_for "$EASYAIOT_ROOT" ai)" \
             --target runtime \
             --platform "$DOCKER_PLATFORM" \
             -t ai-service:latest \

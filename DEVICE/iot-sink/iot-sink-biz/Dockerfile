@@ -11,12 +11,6 @@ WORKDIR /iot-sink-biz
 # 从宿主机挂载的 Jar 包目录复制构建产物
 COPY target/jars/iot-sink-biz.jar app.jar
 
-# 如果 Jar 包不存在，给出提示
-RUN if [ ! -f app.jar ]; then \
-        echo "错误: iot-sink-biz.jar 不存在！请先运行 base-builder 服务编译 Jar 包。" && \
-        exit 1; \
-    fi
-
 # 设置 TZ 时区
 # 设置 JAVA_OPTS 环境变量，可通过 docker run -e "JAVA_OPTS=" 进行覆盖
 ENV TZ=Asia/Shanghai JAVA_OPTS="-Xms512m -Xmx512m"

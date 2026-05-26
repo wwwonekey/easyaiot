@@ -1,12 +1,12 @@
 # 构建期依赖缓存（运行时无需挂载）：
-#   .build-cache/pip-cache、pip-wheels — docker build 时 bind mount（见 Dockerfile、install_linux*.sh）
+#   项目根 .build-cache/video/pip-cache、pip-wheels — docker build 时 bind mount（见 install_linux*.sh）
 #   目录由 install 脚本预创建，默认属主 UID/GID=1000（BUILD_CACHE_UID 可覆盖）
 services:
   video-service:
     image: video-service:latest
     container_name: video-service
     user: root
-    runtime: nvidia
+    # runtime: nvidia  # 由 install_linux.sh 检测到 GPU 后自动启用
 
     # 环境变量文件（用于Docker部署）
     env_file:
@@ -90,13 +90,16 @@ services:
       - NO_PROXY=${NO_PROXY:-localhost,127.0.0.1}
       # GPU配置
       - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [ gpu ]
+
+    # 资源限制（GPU 配置，由 install_linux.sh 在检测到 GPU 后自动启用）
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [ gpu ]
+
     # 注意：使用host网络模式时，不需要配置extra_hosts
     # 容器直接使用宿主机网络栈，Kafka配置应使用宿主机IP或localhost，不能使用容器名
     # 如果Kafka运行在宿主机上，使用localhost:9092

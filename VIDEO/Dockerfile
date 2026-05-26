@@ -1,6 +1,6 @@
-# syntax=docker/dockerfile:1.4
+# BuildKit 内置前端，支持 RUN --mount
 # 使用PyTorch官方镜像作为基础镜像（与AI服务保持一致）
-# pip 缓存挂载宿主机 .build-cache/pip-cache 与 pip-wheels
+# pip 缓存：.build-cache/video/（--build-context pip-cache / pip-wheels）
 FROM pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel AS base
 
 # 设置环境变量
@@ -9,7 +9,8 @@ ENV PYTHONUNBUFFERED=1 \
     TZ=Asia/Shanghai \
     CUDA_VISIBLE_DEVICES=0 \
     QT_QPA_PLATFORM=xcb \
-    QT_X11_NO_MITSHM=1
+    QT_X11_NO_MITSHM=1 \
+    PIP_UPGRADE_STRATEGY=only-if-needed
 
 # 设置工作目录
 WORKDIR /app
@@ -26,9 +27,10 @@ RUN set -ex && \
     sed -i 's|http://.*archive.ubuntu.com|https://mirrors.huaweicloud.com|g' /etc/apt/sources.list && \
     sed -i 's|http://.*security.ubuntu.com|https://mirrors.huaweicloud.com|g' /etc/apt/sources.list
 
-# 安装系统依赖包（单层RUN提高缓存效率）
-# 包含视频处理所需的ffmpeg和相关库
-RUN set -ex && \
+# 安装系统依赖包（apt 缓存跨次构建复用；含 ffmpeg 等 VIDEO 专用包）
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=apt-cache-ai-video-devel \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked,id=apt-lib-ai-video-devel \
+    set -ex && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -63,13 +65,13 @@ RUN set -ex && \
 # ======================= 第二阶段：Python依赖安装 =======================
 FROM dependencies AS python-deps
 
-COPY requirements.txt .
-COPY .build-cache/pip-wheels /opt/offline-pip
+COPY requirements-docker.txt requirements-base.txt ./
+COPY --from=pip-wheels . /opt/offline-pip
 ARG OFFLINE_MODE=0
 ENV PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 
 RUN --mount=type=bind,from=pip-cache,source=.,target=/mnt/pip-cache,rw \
-    --mount=type=cache,target=/tmp/pip-wheels-build,id=pip-wheels-build \
+    --mount=type=cache,target=/tmp/pip-wheels-build,id=pip-wheels-build-video \
     set -ex && \
     mkdir -p /mnt/pip-cache/http /tmp/pip-wheels-build && \
     rm -rf /mnt/pip-cache/wheels && \
@@ -78,18 +80,26 @@ RUN --mount=type=bind,from=pip-cache,source=.,target=/mnt/pip-cache,rw \
     pip install --upgrade pip -i "${PIP_INDEX_URL}" && \
     if [ -n "$(find /opt/offline-pip -maxdepth 1 -type f 2>/dev/null)" ]; then \
         py_tag="$(python -c 'import sys; print("cp{}{}".format(sys.version_info.major, sys.version_info.minor))')" && \
-        if grep -Eq '^torch([<>= ].*)?$' requirements.txt && ls /opt/offline-pip/torch-*.whl >/dev/null 2>&1; then \
+        if grep -Eq '^torch([<>= ].*)?$' requirements-docker.txt && ls /opt/offline-pip/torch-*.whl >/dev/null 2>&1; then \
             if ! ls /opt/offline-pip/torch-*-"${py_tag}"-*.whl >/dev/null 2>&1; then \
                 echo "离线 wheel ABI 不匹配: ${py_tag}" && exit 1; \
             fi; \
         fi && \
-        echo "使用宿主机 pip-wheels 离线安装..." && \
-        pip install --user -r requirements.txt --no-index --find-links /opt/offline-pip --prefer-binary; \
+        if [ "$OFFLINE_MODE" = "1" ]; then \
+            echo "OFFLINE_MODE=1：仅使用 pip-wheels 离线安装..." && \
+            pip install -r requirements-docker.txt --no-index --find-links /opt/offline-pip --prefer-binary; \
+        elif pip install -r requirements-docker.txt --dry-run --no-index --find-links /opt/offline-pip --prefer-binary >/dev/null 2>&1; then \
+            echo "pip-wheels 可覆盖全部依赖，离线安装..." && \
+            pip install -r requirements-docker.txt --no-index --find-links /opt/offline-pip --prefer-binary; \
+        else \
+            echo "pip-wheels 与 requirements 未完全匹配，使用清华源 + find-links 混合安装..." && \
+            pip install -r requirements-docker.txt --find-links /opt/offline-pip --prefer-binary -i "${PIP_INDEX_URL}"; \
+        fi; \
     elif [ "$OFFLINE_MODE" = "1" ]; then \
         echo "OFFLINE_MODE=1 且无 pip-wheels，请先执行 cache_resources.sh" && exit 1; \
     else \
         echo "使用清华源 + 宿主机 pip-cache 在线安装..." && \
-        pip install --user -r requirements.txt -i "${PIP_INDEX_URL}"; \
+        pip install -r requirements-docker.txt -i "${PIP_INDEX_URL}"; \
     fi
 
 # ======================= 第三阶段：应用部署 =======================

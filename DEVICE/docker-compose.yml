@@ -1,5 +1,5 @@
 # 构建：install_linux.sh 两阶段（Dockerfile.base 一次 Maven → target/jars → 各模块 Dockerfile）
-# Maven 依赖缓存：.build-cache/m2/repository
+# Maven 依赖缓存：项目根 .build-cache/device/m2/repository
 services:
   iot-gateway:
     image: iot-gateway:latest

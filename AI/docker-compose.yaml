@@ -1,12 +1,12 @@
 # 构建期依赖缓存（运行时无需挂载）：
-#   .build-cache/pip-cache、pip-wheels — docker build 时 bind mount（见 Dockerfile、install_linux*.sh）
-#   auto-labeling 子服务另有独立 .build-cache；默认属主 UID/GID=1000
+#   项目根 .build-cache/{ai,video,auto-labeling}/pip-cache、pip-wheels — 按模块隔离（见 install_linux*.sh）
+#   默认属主 UID/GID=1000（BUILD_CACHE_UID 可覆盖）
 services:
   ai-service:
     image: ai-service:latest
     container_name: ai-service
     user: root
-    runtime: nvidia
+    # runtime: nvidia  # 由 install_linux.sh 检测到 GPU 后自动启用
 
     # 环境变量文件（用于Docker部署）
     env_file:
@@ -98,77 +98,79 @@ services:
     #           count: all      # 使用全部 GPU
     #           capabilities: [gpu]
 
-    # # 重启策略
-    # restart: unless-stopped
+    # 重启策略
+    restart: unless-stopped
 
-    # # 健康检查
-    # # 注意：start_period设置为90秒，因为应用启动时会等待Nacos服务（最多30秒）
-    # # 加上应用初始化时间，总共可能需要60-90秒
-    # healthcheck:
-    #   test: ["CMD", "curl", "-f", "http://localhost:5000/actuator/health"]
-    #   interval: 30s
-    #   timeout: 10s
-    #   retries: 3
-    #   start_period: 90s
+    # 健康检查
+    # 注意：start_period设置为90秒，因为应用启动时会等待Nacos服务（最多30秒）
+    # 加上应用初始化时间，总共可能需要60-90秒
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
 
-    # # 注意：使用network_mode: host后，不再需要networks配置
-    # # 容器将直接使用宿主机的网络栈，可以：
-    # # 1. 访问宿主机局域网
-    # # 2. 通过localhost访问映射到宿主机的中间件服务端口
-    # # 3. 确保中间件服务（Nacos、PostgresSQL等）的端口已映射到宿主机
+    # 注意：使用network_mode: host后，不再需要networks配置
+    # 容器将直接使用宿主机的网络栈，可以：
+    # 1. 访问宿主机局域网
+    # 2. 通过localhost访问映射到宿主机的中间件服务端口
+    # 3. 确保中间件服务（Nacos、PostgresSQL等）的端口已映射到宿主机
 
-    # # 日志配置
-    # logging:
-    #   driver: "json-file"
-    #   options:
-    #     max-size: "10m"
-    #     max-file: "3"
+    # 日志配置
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   auto-labeling:
-    # image: auto-labeling:latest
-    # container_name: auto-labeling
-    # user: root
+    image: auto-labeling:latest
+    container_name: auto-labeling
+    user: root
+    # 默认 CPU 推理；如需 GPU 加速自动标注，取消下行注释（需 NVIDIA Container Toolkit）
+    # runtime: nvidia
 
-    # env_file:
-    #   - ./services/auto-labeling/.env.docker
+    env_file:
+      - ./services/auto-labeling/.env.docker
 
-    # network_mode: host
+    network_mode: host
 
-    # volumes:
-    #   # 仅挂载标注数据，避免覆盖镜像内 style.css / script.js 等前端静态资源
-    #   - ./services/auto-labeling/static/annotations:/app/static/annotations
-    #   - ./services/auto-labeling/plugins:/app/plugins
-    #   - ./services/auto-labeling/.env.docker:/app/.env.docker:ro
+    volumes:
+      # 仅挂载标注数据，避免覆盖镜像内 style.css / script.js 等前端静态资源
+      - ./services/auto-labeling/static/annotations:/app/static/annotations
+      - ./services/auto-labeling/plugins:/app/plugins
+      - ./services/auto-labeling/.env.docker:/app/.env.docker:ro
 
-    # environment:
-    #   - PYTHONUNBUFFERED=${PYTHONUNBUFFERED:-1}
-    #   - FLASK_RUN_PORT=${AUTO_LABELING_PORT:-8000}
-    #   - FLASK_RUN_HOST=0.0.0.0
-    #   - NACOS_SERVER=${NACOS_SERVER:-localhost:8848}
-    #   - NACOS_NAMESPACE=${NACOS_NAMESPACE:-}
-    #   - NACOS_USERNAME=${NACOS_USERNAME:-nacos}
-    #   - NACOS_PASSWORD=${NACOS_PASSWORD:-basiclab@iot78475418754}
-    #   - SERVICE_NAME=auto-labeling-server
-    #   - MINIO_ENDPOINT=${MINIO_ENDPOINT:-localhost:9000}
-    #   - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
-    #   - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-basiclab@iot975248395}
-    #   - MINIO_SECURE=${MINIO_SECURE:-false}
-    #   - TZ=${TZ:-Asia/Shanghai}
+    environment:
+      - PYTHONUNBUFFERED=${PYTHONUNBUFFERED:-1}
+      - FLASK_RUN_PORT=${AUTO_LABELING_PORT:-8000}
+      - FLASK_RUN_HOST=0.0.0.0
+      - NACOS_SERVER=${NACOS_SERVER:-localhost:8848}
+      - NACOS_NAMESPACE=${NACOS_NAMESPACE:-}
+      - NACOS_USERNAME=${NACOS_USERNAME:-nacos}
+      - NACOS_PASSWORD=${NACOS_PASSWORD:-basiclab@iot78475418754}
+      - SERVICE_NAME=auto-labeling-server
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-localhost:9000}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-basiclab@iot975248395}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
+      - TZ=${TZ:-Asia/Shanghai}
 
-    # restart: unless-stopped
+    restart: unless-stopped
 
-    # healthcheck:
-    #   test: ["CMD", "curl", "-f", "http://localhost:8000/"]
-    #   interval: 30s
-    #   timeout: 10s
-    #   retries: 3
-    #   start_period: 60s
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
-    # logging:
-    #   driver: "json-file"
-    #   options:
-    #     max-size: "10m"
-    #     max-file: "3"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 # 注意：使用network_mode: host后，不再需要networks配置
 # 如果需要同时访问容器网络和宿主机网络，可以考虑以下替代方案：

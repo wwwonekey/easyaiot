@@ -33,6 +33,8 @@ cd "$SCRIPT_DIR"
 EASYAIOT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # shellcheck source=../.scripts/docker/init-build-cache-dirs.sh
 source "${EASYAIOT_ROOT}/.scripts/docker/init-build-cache-dirs.sh"
+# shellcheck source=../.scripts/docker/gpu_compose_helpers.sh
+source "${EASYAIOT_ROOT}/.scripts/docker/gpu_compose_helpers.sh"
 
 # 打印带颜色的消息
 print_info() {
@@ -52,20 +54,21 @@ print_error() {
 }
 
 prepare_cached_resources() {
-    init_project_build_cache_dirs "$SCRIPT_DIR"
-    local wheels="${SCRIPT_DIR}/.build-cache/pip-wheels"
-    local cache_script="${SCRIPT_DIR}/cache_resources.sh"
+    init_easyaiot_build_cache_dirs "$EASYAIOT_ROOT"
+    local wheels
+    wheels="$(pip_wheels_build_context_dir_for "$EASYAIOT_ROOT" video)"
+    local cache_script="${EASYAIOT_ROOT}/.scripts/docker/cache_python_resources.sh"
 
     if find "$wheels" -maxdepth 1 -type f \( -name "*.whl" -o -name "*.tar.gz" -o -name "*.zip" \) 2>/dev/null | grep -q .; then
-        print_success "检测到 pip-wheels: $wheels"
+        print_success "检测到 [video] pip-wheels: $wheels"
         return 0
     fi
     if [ "${AUTO_CACHE_PIP:-1}" != "1" ] || [ ! -f "$cache_script" ]; then
-        print_info "构建时将使用 pip-cache 在线安装（清华源）"
+        print_info "构建时将使用 [video] pip-cache 在线安装（清华源）"
         return 0
     fi
-    print_warning "首次需预下载 pip 离线包（约 2–5GB），可能需要 10–30 分钟，进度如下..."
-    "$cache_script" || /bin/bash "$cache_script" || print_warning "预下载失败，将在线安装"
+    print_warning "[video] 首次需预下载 pip 离线包，可能需要 10–30 分钟..."
+    "$cache_script" video || /bin/bash "$cache_script" video || print_warning "预下载失败，将在线安装"
 }
 
 build_with_cache() {
@@ -73,13 +76,14 @@ build_with_cache() {
     local build_log="/tmp/docker_build_$$.log"
     local build_status=0
 
-    init_project_build_cache_dirs "$SCRIPT_DIR"
+    init_easyaiot_build_cache_dirs "$EASYAIOT_ROOT"
     enable_docker_buildkit
 
-    print_info "docker build（.build-cache pip-cache/pip-wheels，--build-context pip-cache）..."
+    print_info "docker build（.build-cache/video pip-cache/pip-wheels）..."
     set +e
     docker build \
-        --build-context "pip-cache=$(pip_cache_build_context_dir "$SCRIPT_DIR")" \
+        --build-context "pip-cache=$(pip_cache_build_context_dir_for "$EASYAIOT_ROOT" video)" \
+        --build-context "pip-wheels=$(pip_wheels_build_context_dir_for "$EASYAIOT_ROOT" video)" \
         --target runtime \
         -t video-service:latest \
         --pull=false \
@@ -371,6 +375,8 @@ install_service() {
     check_network
     create_directories
     create_env_file
+    check_gpu
+    configure_compose_gpu "docker-compose.yaml" ".env.docker"
     prepare_cached_resources
     
     print_info "构建 Docker 镜像（优先复用离线 pip 缓存）..."
@@ -405,6 +411,9 @@ start_service() {
         print_warning ".env.docker 文件不存在，正在创建..."
         create_env_file
     fi
+
+    check_gpu
+    configure_compose_gpu "docker-compose.yaml" ".env.docker"
     
     $COMPOSE_CMD up -d
     print_success "服务已启动"
@@ -484,22 +493,31 @@ build_image() {
 
 # 清理服务
 clean_service() {
-    print_warning "这将删除容器、镜像和数据卷，确定要继续吗？(y/N)"
-    read -r response
-    
-    if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
-        check_docker
-        check_docker_compose
-        print_info "停止并删除容器..."
+    if [ "${EASYAIOT_AUTO_YES:-}" != "1" ]; then
+        print_warning "这将删除容器、镜像和数据卷，确定要继续吗？"
+        local response
+        while true; do
+            read -r -p "确认继续? [y/n] " response
+            case "$(echo "$response" | tr '[:upper:]' '[:lower:]')" in
+                y|yes) break ;;
+                n|no|'')
+                    print_info "已取消清理操作"
+                    return
+                    ;;
+                *) echo "请输入 y/yes 或 n/no" ;;
+            esac
+        done
+    fi
+
+    check_docker
+    check_docker_compose
+    print_info "停止并删除容器..."
         $COMPOSE_CMD down -v
         
         print_info "删除镜像..."
         docker rmi video-service:latest 2>/dev/null || true
         
-        print_success "清理完成"
-    else
-        print_info "已取消清理操作"
-    fi
+    print_success "清理完成"
 }
 
 # 更新服务

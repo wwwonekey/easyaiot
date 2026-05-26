@@ -1,5 +1,5 @@
 # 构建期依赖缓存（运行时无需挂载）：
-#   .build-cache/pnpm-store — docker build 时 bind mount + pnpm type=cache（见 Dockerfile、install_linux.sh）
+#   项目根 .build-cache/web/pnpm-store — docker build 时 local cache（见 Dockerfile、install_linux.sh）
 #   默认属主 UID/GID=1000
 services:
   web-service:

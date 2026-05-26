@@ -13,9 +13,8 @@ WORKDIR /app
 
 # 从宿主机挂载的 Jar 包目录复制构建产物
 # 注意：构建上下文是 DEVICE 根目录，所以路径是相对于根目录的
+# 缺失时 COPY 会直接失败；请先 ./install_linux.sh build-base
 COPY target/jars/iot-gateway.jar app.jar
-
-RUN test -f app.jar || (echo "缺少 target/jars/iot-gateway.jar，请先: ./install_linux.sh build-base" && exit 1)
 RUN chown appuser:appuser app.jar
 
 # 网关专用环境变量配置

@@ -60,8 +60,9 @@ print_error() {
 }
 
 prepare_cached_resources() {
-    init_project_build_cache_dirs "$SCRIPT_DIR"
-    local wheels="${SCRIPT_DIR}/.build-cache/pip-wheels"
+    init_easyaiot_build_cache_dirs "$EASYAIOT_ROOT"
+    local wheels
+    wheels="$(arm_pip_wheels_build_context_dir_for "$EASYAIOT_ROOT" video)"
     local cache_script="${SCRIPT_DIR}/cache_resources_arm.sh"
 
     if find "$wheels" -maxdepth 1 -type f \( -name "*.whl" -o -name "*.tar.gz" -o -name "*.zip" \) 2>/dev/null | grep -q .; then
@@ -85,13 +86,14 @@ build_with_cache() {
     local build_log="/tmp/docker_build_kylin_$$.log"
     local build_status=0
 
-    init_project_build_cache_dirs "$SCRIPT_DIR"
+    init_easyaiot_build_cache_dirs "$EASYAIOT_ROOT"
     enable_docker_buildkit
 
-    print_info "docker build（麒麟 ARM，.build-cache bind mount）..."
+    print_info "docker build（麒麟 ARM，项目根 .build-cache bind mount）..."
     set +e
     docker build \
-        --build-context "pip-cache=$(pip_cache_build_context_dir "$SCRIPT_DIR")" \
+        --build-context "pip-cache=$(pip_cache_build_context_dir_for "$EASYAIOT_ROOT" video)" \
+        --build-context "pip-wheels=$(arm_pip_wheels_build_context_dir_for "$EASYAIOT_ROOT" video)" \
         --target runtime \
         --platform "$DOCKER_PLATFORM" \
         -t video-service:latest \

@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.4
+# BuildKit 内置前端，支持 RUN --mount
 # 备用：单 Dockerfile 多 target 一体构建（日常请用 Dockerfile.base + 各模块 Dockerfile，见 install_linux.sh）
 FROM maven:3.9.11-eclipse-temurin-21-alpine AS builder
 
@@ -43,11 +43,11 @@ COPY iot-gb28181/pom.xml ./iot-gb28181/
 COPY . .
 
 # 预下载依赖到宿主机挂载的 .m2（二次构建复用，无需重复从中央库拉取）
-RUN --mount=type=bind,source=.build-cache/m2/repository,target=/m2/repository \
+RUN --mount=type=bind,source=../.build-cache/device/m2/repository,target=/m2/repository \
     mvn process-resources -B -Drevision=1.0.0 && \
     (mvn dependency:go-offline -B -Drevision=1.0.0 || echo "dependency:go-offline 部分模块跳过，继续打包")
 
-RUN --mount=type=bind,source=.build-cache/m2/repository,target=/m2/repository \
+RUN --mount=type=bind,source=../.build-cache/device/m2/repository,target=/m2/repository \
     mvn clean package -DskipTests -Dmaven.test.skip=true -Drevision=1.0.0
 
 FROM bellsoft/liberica-openjdk-rocky:21.0.8-cds AS runtime-base

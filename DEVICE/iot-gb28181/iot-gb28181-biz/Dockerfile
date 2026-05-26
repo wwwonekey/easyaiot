@@ -7,9 +7,7 @@ WORKDIR /app
 
 COPY target/jars/iot-gb28181-biz.jar app.jar
 
-RUN if [ ! -f app.jar ]; then \
-        echo "错误: iot-gb28181-biz.jar 不存在，请先执行 ./install_linux.sh build-base" && exit 1; \
-    fi && chown appuser:appuser app.jar
+RUN chown appuser:appuser app.jar
 
 ENV TZ=Asia/Shanghai \
     LANG=C.UTF-8 \

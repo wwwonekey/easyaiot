@@ -1,14 +1,10 @@
-Flask==3.1.2
-flask-cors==6.0.1
-nacos-sdk-python==2.0.9
-python-dotenv==1.0.0
-netifaces==0.11.0
-opencv-python==4.5.4.60
-pillow==10.3.0
-numpy==1.26.4
-psutil==5.9.8
-requests==2.28.2
-minio==7.2.15
-filelock==3.13.1
-ultralytics>=8.0.0
+--index-url https://pypi.tuna.tsinghua.edu.cn/simple
+# 本地 / 服务器直装（非 Docker）
+#   pip install -r requirements.txt
+# Docker 构建请使用 requirements-docker.txt（见 Dockerfile）
 
+-r requirements-base.txt
+
+# 与标注平台 Docker 基础镜像 pytorch/pytorch:2.9.0-cuda12.8-cudnn9-runtime 对齐（torch 2.9.x）
+torch>=2.9.0
+torchvision>=0.24.0

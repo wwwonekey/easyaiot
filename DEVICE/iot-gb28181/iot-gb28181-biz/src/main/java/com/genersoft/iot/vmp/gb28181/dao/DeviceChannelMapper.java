@@ -337,14 +337,14 @@ public interface DeviceChannelMapper {
             "DELETE FROM wvp_device_channel WHERE id=#{item.id}" +
             "</foreach>" +
             "</script>"})
-    int batchDel(List<DeviceChannel> deleteChannelList);
+    int batchDel(@Param("deleteChannelList") List<DeviceChannel> deleteChannelList);
 
     @Update({"<script>" +
             "<foreach collection='channels' item='item' separator=';'>" +
             "UPDATE wvp_device_channel SET status=#{item.status} WHERE data_type = #{item.dataType} and device_id=#{item.deviceId}" +
             "</foreach>" +
             "</script>"})
-    int batchUpdateStatus(List<DeviceChannel> channels);
+    int batchUpdateStatus(@Param("channels") List<DeviceChannel> channels);
 
     @Select("select count(1) from wvp_device_channel where status = 'ON'")
     int getOnlineCount();
@@ -374,7 +374,7 @@ public interface DeviceChannelMapper {
             "<if test='item.id == 0'>WHERE data_type = #{item.dataType} and data_device_id=#{item.dataDeviceId} AND device_id=#{item.deviceId}</if>" +
             "</foreach>" +
             "</script>"})
-    void batchUpdatePosition(List<DeviceChannel> channelList);
+    void batchUpdatePosition(@Param("channelList") List<DeviceChannel> channelList);
 
     @SelectProvider(type = DeviceChannelProvider.class, method = "getOne")
     DeviceChannel getOne(@Param("id") int id);

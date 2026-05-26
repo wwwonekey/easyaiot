@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.4
+# BuildKit 内置前端，支持 RUN --mount
 # 使用PyTorch ARM架构构建器镜像作为基础镜像
 # 注意：manylinuxaarch64-builder 是基于 CentOS 的构建器镜像
 # 如果 cuda12.9 版本不存在，可以尝试 cuda12.8 或其他可用版本
@@ -166,13 +166,14 @@ RUN set -ex && \
 # ======================= 第三阶段：Python依赖安装 =======================
 FROM python-env AS python-deps
 
-COPY requirements.txt .
-COPY .build-cache/pip-wheels /opt/offline-pip
+# ARM 构建镜像无预装 PyTorch，使用本地全量 requirements.txt
+COPY requirements.txt requirements-base.txt ./
+COPY --from=pip-wheels . /opt/offline-pip
 ARG OFFLINE_MODE=0
 ENV PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 
 RUN --mount=type=bind,from=pip-cache,source=.,target=/mnt/pip-cache,rw \
-    --mount=type=cache,target=/tmp/pip-wheels-build,id=pip-wheels-build \
+    --mount=type=cache,target=/tmp/pip-wheels-build,id=pip-wheels-build-video-arm \
     set -ex && \
     mkdir -p /mnt/pip-cache/http /tmp/pip-wheels-build && \
     rm -rf /mnt/pip-cache/wheels && \
@@ -186,13 +187,21 @@ RUN --mount=type=bind,from=pip-cache,source=.,target=/mnt/pip-cache,rw \
                 echo "离线 wheel ABI 不匹配: ${py_tag}" && exit 1; \
             fi; \
         fi && \
-        echo "使用宿主机 pip-wheels 离线安装..." && \
-        pip3 install --user -r requirements.txt --no-index --find-links /opt/offline-pip --prefer-binary; \
+        if [ "$OFFLINE_MODE" = "1" ]; then \
+            echo "OFFLINE_MODE=1：仅使用 pip-wheels 离线安装..." && \
+            pip3 install -r requirements.txt --no-index --find-links /opt/offline-pip --prefer-binary; \
+        elif pip3 install -r requirements.txt --dry-run --no-index --find-links /opt/offline-pip --prefer-binary >/dev/null 2>&1; then \
+            echo "pip-wheels 可覆盖全部依赖，离线安装..." && \
+            pip3 install -r requirements.txt --no-index --find-links /opt/offline-pip --prefer-binary; \
+        else \
+            echo "pip-wheels 与 requirements 未完全匹配，使用清华源 + find-links 混合安装..." && \
+            pip3 install -r requirements.txt --find-links /opt/offline-pip --prefer-binary -i "${PIP_INDEX_URL}"; \
+        fi; \
     elif [ "$OFFLINE_MODE" = "1" ]; then \
         echo "OFFLINE_MODE=1 且无 pip-wheels" && exit 1; \
     else \
         echo "使用清华源 + 宿主机 pip-cache 在线安装..." && \
-        pip3 install --user -r requirements.txt -i "${PIP_INDEX_URL}"; \
+        pip3 install -r requirements.txt -i "${PIP_INDEX_URL}"; \
     fi
 
 # ======================= 第四阶段：应用部署 =======================

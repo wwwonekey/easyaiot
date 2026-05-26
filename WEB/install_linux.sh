@@ -88,25 +88,46 @@ check_docker_compose() {
     fi
 }
 
-# 执行 docker build（BuildKit + 宿主机 .build-cache/pnpm-store bind mount）
+# 组合 git 提交与 clean 写入的戳，用于 Dockerfile ARG CACHE_BUST（使 COPY 之后层在代码/clean 后重建）
+get_web_build_cache_bust() {
+    local git_rev stamp
+    git_rev=$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null || echo "nogit")
+    stamp=""
+    if [ -f "$(web_build_stamp_file "$EASYAIOT_ROOT")" ]; then
+        stamp=$(tr -d '\n' < "$(web_build_stamp_file "$EASYAIOT_ROOT")")
+    fi
+    echo "${git_rev}-${stamp}"
+}
+
+# 执行 docker build（BuildKit + 宿主机 .build-cache/web/pnpm-store 本地 cache 后端）
 docker_build_image() {
-    init_project_build_cache_dirs "$SCRIPT_DIR"
+    init_easyaiot_build_cache_dirs "$EASYAIOT_ROOT"
     enable_docker_buildkit
     mkdir -p "${SCRIPT_DIR}/docker-build-logs"
-    local ts log_new pnpm_log ec
+    local ts log_new pnpm_log ec cache_bust
     ts=$(date +%Y%m%d-%H%M%S)
     log_new="${SCRIPT_DIR}/docker-build-logs/docker-build-${ts}.log"
     pnpm_log="${SCRIPT_DIR}/docker-build-logs/pnpm-build.log"
+    cache_bust=$(get_web_build_cache_bust)
     {
         echo ""
-        echo "======== docker build 开始 ${ts} ========"
+        echo "======== docker build 开始 ${ts} CACHE_BUST=${cache_bust} ========"
     } >> "$pnpm_log"
     print_info "本次构建独立日志: docker-build-logs/docker-build-${ts}.log；历史追加: docker-build-logs/pnpm-build.log"
+    print_info "构建缓存标识 CACHE_BUST=${cache_bust}（clean 或代码变更后将重新 pnpm install/build）"
     set -o pipefail
-    local pnpm_store="${SCRIPT_DIR}/.build-cache/pnpm-store"
-    mkdir -p "${pnpm_store}/v3"
+    local pnpm_store
+    pnpm_store="$(pnpm_store_dir "$EASYAIOT_ROOT")"
+    mkdir -p "${pnpm_store}"
+    # BuildKit bind mount 的 rw 写入不会回写宿主机；用 local cache 后端持久化 pnpm store
+    local cache_from_to=()
+    if [ -d "${pnpm_store}" ] && [ "$(find "${pnpm_store}" -mindepth 1 -print -quit 2>/dev/null)" ]; then
+        cache_from_to+=(--cache-from "type=local,src=${pnpm_store}")
+    fi
+    cache_from_to+=(--cache-to "type=local,dest=${pnpm_store},mode=max")
     docker build \
-        --build-context "pnpm-store=${pnpm_store}" \
+        "${cache_from_to[@]}" \
+        --build-arg "CACHE_BUST=${cache_bust}" \
         "$@" 2>&1 | tee "$log_new" | tee -a "$pnpm_log"
     ec=$?
     set +o pipefail
@@ -629,11 +650,23 @@ clean_service() {
     check_docker
     check_docker_compose
     
-    print_warning "这将删除容器、镜像和数据卷，确定要继续吗？(y/N)"
-    read -r response
-    
-    if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
-        print_info "停止并删除容器..."
+    if [ "${EASYAIOT_AUTO_YES:-}" != "1" ]; then
+        print_warning "这将删除容器、镜像和数据卷，确定要继续吗？"
+        local response
+        while true; do
+            read -r -p "确认继续? [y/n] " response
+            case "$(echo "$response" | tr '[:upper:]' '[:lower:]')" in
+                y|yes) break ;;
+                n|no|'')
+                    print_info "已取消清理操作"
+                    return
+                    ;;
+                *) echo "请输入 y/yes 或 n/no" ;;
+            esac
+        done
+    fi
+
+    print_info "停止并删除容器..."
         $COMPOSE_CMD down -v --remove-orphans
         
         # 强制删除容器（即使已停止）
@@ -652,11 +685,13 @@ clean_service() {
         else
             print_info "dist 文件夹不存在，跳过清理"
         fi
+
+        # 使下次 install/build 失效 Docker 层缓存（否则 pnpm install/build 会全部 CACHED）
+        init_easyaiot_build_cache_dirs "$EASYAIOT_ROOT"
+        date +%s > "$(web_build_stamp_file "$EASYAIOT_ROOT")"
+        print_info "已更新 .build-cache/web/.build-stamp，下次构建将重新编译前端（.build-cache/web/pnpm-store 依赖缓存保留）"
         
-        print_success "清理完成"
-    else
-        print_info "已取消清理操作"
-    fi
+    print_success "清理完成"
 }
 
 # 更新服务

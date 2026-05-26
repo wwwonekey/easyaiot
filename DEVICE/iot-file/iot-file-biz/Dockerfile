@@ -14,12 +14,7 @@ WORKDIR /app
 # 从宿主机挂载的 Jar 包目录复制构建产物
 COPY target/jars/iot-file-biz.jar app.jar
 
-# 如果 Jar 包不存在，给出提示
-RUN if [ ! -f app.jar ]; then \
-        echo "错误: iot-file-biz.jar 不存在！请先运行 base-builder 服务编译 Jar 包。" && \
-        exit 1; \
-    fi && \
-    chown appuser:appuser app.jar
+RUN chown appuser:appuser app.jar
 
 # 环境变量配置
 ENV TZ=Asia/Shanghai \
