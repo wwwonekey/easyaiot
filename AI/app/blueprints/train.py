@@ -35,6 +35,9 @@ MAX_LOCAL_DATASET_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024
 train_status = {}
 train_processes = {}
 
+# 数据库中表示「进行中」的状态（容器重启后需 recover_stale_train_tasks 清理）
+ACTIVE_TRAIN_STATUSES = ('preparing', 'train', 'Train', 'running', 'stopping')
+
 
 def _build_train_hyperparameters(
     epochs,
@@ -276,7 +279,12 @@ def api_start_train():
         if record_id:
             train_task = TrainTask.query.get(record_id)
             if train_task:
-                if train_task.id in train_status and train_status[train_task.id]['status'] in ['preparing', 'train']:
+                in_memory = (
+                    train_task.id in train_status
+                    and train_status[train_task.id]['status'] in ['preparing', 'train']
+                )
+                in_db = train_task.status in ACTIVE_TRAIN_STATUSES
+                if in_memory or in_db:
                     return jsonify({'success': False, 'code': 0, 'msg': '该训练任务已在进行中'}), 200
                 train_task.dataset_path = dataset_zip_path
                 if dataset_name:
@@ -376,6 +384,39 @@ def get_project_root():
     return os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 
 
+def recover_stale_train_tasks(app=None):
+    """
+    服务重启后，将数据库中仍为进行中、但本进程无训练线程的任务标记为失败。
+    避免进度长期卡在 15% 等中间态。
+    """
+    from run import create_app
+
+    application = app or create_app()
+    recovered = 0
+    with application.app_context():
+        stale_tasks = TrainTask.query.filter(
+            TrainTask.status.in_(ACTIVE_TRAIN_STATUSES)
+        ).all()
+        if not stale_tasks:
+            return 0
+
+        interrupt_msg = (
+            f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+            "训练进程因服务重启或异常退出而中断，请重新启动训练任务。"
+        )
+        for task in stale_tasks:
+            if task.id in train_status:
+                continue
+            task.status = 'error'
+            task.end_time = datetime.utcnow()
+            task.train_log = (task.train_log or '') + interrupt_msg + '\n'
+            recovered += 1
+
+        if recovered:
+            db.session.commit()
+    return recovered
+
+
 def _parse_minio_download_url(url: str):
     """解析 MinIO 下载 URL，返回 (bucket_name, object_key)。"""
     try:
@@ -453,9 +494,21 @@ def api_stop_train(task_id):
             pass
 
         return jsonify({'success': True, 'code': 0, 'msg': '停止请求已发送'}), 200
-    else:
-        update_log("没有找到训练状态", task_id)
-        return jsonify({'success': False, 'code': 0, 'msg': '没有正在进行的训练'}), 200
+
+    train_task = TrainTask.query.get(task_id)
+    if train_task and train_task.status in ACTIVE_TRAIN_STATUSES:
+        stop_msg = (
+            f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+            "训练已停止（训练进程不在当前服务实例中）。"
+        )
+        train_task.status = 'stopped'
+        train_task.end_time = datetime.utcnow()
+        train_task.train_log = (train_task.train_log or '') + stop_msg + '\n'
+        db.session.commit()
+        return jsonify({'success': True, 'code': 0, 'msg': '训练任务已标记为停止'}), 200
+
+    update_log("没有找到训练状态", task_id)
+    return jsonify({'success': False, 'code': 0, 'msg': '没有正在进行的训练'}), 200
 
 
 @train_bp.route('/<int:task_id>/status')
@@ -667,7 +720,33 @@ def train_model(task_id, epochs=20, model_arch='yolov8n.pt',
                 'message': '正在训练模型...',
                 'progress': 15
             })
+            train_task.status = 'train'
+            db.session.commit()
             update_log_local(f"开始训练模型，共{epochs}个epochs...", progress=15)
+
+            def on_train_epoch_end(trainer):
+                if train_status.get(task_id, {}).get('stop_requested'):
+                    raise RuntimeError('训练已被用户停止')
+                total_epochs_count = max(1, int(getattr(trainer, 'epochs', epochs)))
+                now_epoch = int(getattr(trainer, 'epoch', 0)) + 1
+                progress = min(89, 15 + int(now_epoch * 74 / total_epochs_count))
+                train_status[task_id].update({
+                    'progress': progress,
+                    'message': f'训练中 epoch {now_epoch}/{total_epochs_count}...',
+                })
+                if now_epoch == 1 or now_epoch == total_epochs_count or now_epoch % 5 == 0:
+                    update_log_local(
+                        f'训练进度: epoch {now_epoch}/{total_epochs_count} ({progress}%)',
+                        progress=progress,
+                    )
+                else:
+                    train_task.progress = progress
+                    try:
+                        db.session.commit()
+                    except Exception as commit_err:
+                        print(f'更新训练进度失败: {commit_err}')
+
+            yolo_model.add_callback('on_train_epoch_end', on_train_epoch_end)
 
             # 训练模型
             update_log_local(

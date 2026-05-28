@@ -351,6 +351,15 @@ def create_app():
             start_heartbeat_checker(app)
         except Exception as e:
             print(f"⚠️  启动心跳检查任务失败: {str(e)}")
+
+        # 恢复因容器/进程重启而中断的训练任务
+        try:
+            from app.blueprints.train import recover_stale_train_tasks
+            recovered = recover_stale_train_tasks(app)
+            if recovered:
+                print(f'✅ 已将 {recovered} 个因服务重启中断的训练任务标记为失败')
+        except Exception as e:
+            print(f'⚠️  恢复中断训练任务失败: {str(e)}')
     except Exception as e:
         print(f"❌ 蓝图注册失败: {str(e)}")
         import traceback
