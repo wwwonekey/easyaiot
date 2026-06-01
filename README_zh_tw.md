@@ -253,6 +253,10 @@ EasyAIoT由五個核心項目組成：
 </tr>
 </table>
 
+<p style="font-size: 14px; line-height: 1.8; color: #555; margin: 15px 0;">
+如需深入了解各模組技術棧、微服務拆分、中間件拓撲與資料流轉細節，請參閱 <a href=".doc/架构设计/项目架构设计分析.md" style="color: #3498db; text-decoration: none; font-weight: 600;">專案架構設計分析</a>。
+</p>
+
 ## 🖥️ 跨平臺部署優勢
 
 <p style="font-size: 15px; line-height: 1.8; color: #333; margin: 15px 0;">
@@ -324,7 +328,8 @@ EasyAIoT是一個開源學習項目，與商業行為無關。用戶在使用該
 
 ## 📚 部署文檔
 
-- [平臺部署文檔](.doc/部署文档/平台部署文档_zh_tw.md)
+- [平臺部署文檔](.doc/部署文档/平台部署文档_zh_tw.md) — Linux / Mac / Windows 分步部署指南
+- [部署最佳實踐](.doc/部署文档/部署最佳实践.md) — 環境要求、一鍵部署流程、維運排錯與生產環境建議
 
 ## 🎮 演示環境
 

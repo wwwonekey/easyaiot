@@ -253,6 +253,10 @@ EasyAIoT는 다섯 개의 핵심 프로젝트로 구성됩니다:
 </tr>
 </table>
 
+<p style="font-size: 14px; line-height: 1.8; color: #555; margin: 15px 0;">
+각 모듈의 기술 스택, 마이크로서비스 분해, 미들웨어 토폴로지 및 데이터 흐름에 대한 심층 분석은 <a href=".doc/架构设计/项目架构设计分析.md" style="color: #3498db; text-decoration: none; font-weight: 600;">프로젝트 아키텍처 설계 분석</a>을 참조하세요.
+</p>
+
 ## 🖥️ 크로스 플랫폼 배포 장점
 
 <p style="font-size: 15px; line-height: 1.8; color: #333; margin: 15px 0;">
@@ -324,7 +328,8 @@ EasyAIoT는 오픈소스 학습 프로젝트이며 상업적 행위와 무관합
 
 ## 📚 배포 문서
 
-- [플랫폼 배포 문서](.doc/部署文档/平台部署文档_ko.md)
+- [플랫폼 배포 문서](.doc/部署文档/平台部署文档_ko.md) — Linux / Mac / Windows 단계별 배포 가이드
+- [배포 모범 사례](.doc/部署文档/部署最佳实践.md) — 환경 요구 사항, 원클릭 배포, 운영 문제 해결 및 프로덕션 권장 사항
 
 ## 🎮 데모 환경
 

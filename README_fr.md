@@ -253,6 +253,10 @@ EasyAIoT est composé de cinq projets principaux :
 </tr>
 </table>
 
+<p style="font-size: 14px; line-height: 1.8; color: #555; margin: 15px 0;">
+Pour une analyse approfondie de la pile technologique de chaque module, de la décomposition en microservices, de la topologie des middlewares et des flux de données, consultez <a href=".doc/架构设计/项目架构设计分析.md" style="color: #3498db; text-decoration: none; font-weight: 600;">Analyse de l'architecture du projet</a>.
+</p>
+
 ## 🖥️ Avantages du déploiement multiplateforme
 
 <p style="font-size: 15px; line-height: 1.8; color: #333; margin: 15px 0;">
@@ -324,7 +328,8 @@ EasyAIoT est un projet d'apprentissage open source, sans lien avec des activité
 
 ## 📚 Documentation de déploiement
 
-- [Documentation de déploiement de la plateforme](.doc/部署文档/平台部署文档_fr.md)
+- [Documentation de déploiement de la plateforme](.doc/部署文档/平台部署文档_fr.md) — Guide de déploiement étape par étape pour Linux / Mac / Windows
+- [Bonnes pratiques de déploiement](.doc/部署文档/部署最佳实践.md) — Exigences d'environnement, déploiement en un clic, dépannage et recommandations pour la production
 
 ## 🎮 Environnement de démonstration
 
