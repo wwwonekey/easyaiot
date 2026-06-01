@@ -254,7 +254,7 @@ EasyAIoT consists of five core projects:
 </table>
 
 <p style="font-size: 14px; line-height: 1.8; color: #555; margin: 15px 0;">
-For an in-depth analysis of each module's tech stack, microservice decomposition, middleware topology, and data flows, see <a href=".doc/架构设计/项目架构设计分析.md" style="color: #3498db; text-decoration: none; font-weight: 600;">Project Architecture Analysis</a>.
+For an in-depth analysis of each module's tech stack, microservice decomposition, middleware topology, and data flows, see <a href=".doc/架构设计/项目架构设计分析_en.md" style="color: #3498db; text-decoration: none; font-weight: 600;">Project Architecture Analysis</a>.
 </p>
 
 ## 🖥️ Cross-Platform Deployment Advantages
@@ -332,7 +332,7 @@ compensate third parties for damages caused by usage. All EasyAIoT-related resou
 ## 📚 Deployment Documentation
 
 - [Platform Deployment Documentation](.doc/部署文档/平台部署文档.md) — Step-by-step deployment guide for Linux / Mac / Windows
-- [Deployment Best Practices](.doc/部署文档/部署最佳实践.md) — Environment requirements, one-click deployment, troubleshooting, and production recommendations
+- [Deployment Best Practices](.doc/部署文档/部署最佳实践_en.md) — Environment requirements, one-click deployment, troubleshooting, and production recommendations
 
 ## 🎮 Demo Environment
 
