@@ -5,9 +5,11 @@ VIDEO 模块 ONNX 推理（支持按 GPU 设备 ID 选择 CUDA Execution Provide
 @email andywebjava@163.com
 @wechat EasyAIoT2025
 """
+import glob
 import json
 import logging
 import os
+import site
 from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
@@ -37,6 +39,58 @@ classes = {
     76: 'scissors', 77: 'teddy bear', 78: 'hair drier', 79: 'toothbrush',
 }
 color_palette = np.random.uniform(100, 255, size=(len(classes), 3))
+
+
+def _prepend_nvidia_lib_paths() -> None:
+    """将 pip 安装的 nvidia/* 库目录加入 LD_LIBRARY_PATH，供 ONNX Runtime CUDA EP 加载。"""
+    if os.environ.get('_ONNX_NVIDIA_LD_PATH_DONE') == '1':
+        return
+    try:
+        search_roots = list(site.getsitepackages())
+        user_site = site.getusersitepackages()
+        if user_site:
+            search_roots.append(user_site)
+        extra: List[str] = []
+        for root in search_roots:
+            if not root or not os.path.isdir(root):
+                continue
+            for lib_dir in glob.glob(os.path.join(root, 'nvidia', '*', 'lib')):
+                if os.path.isdir(lib_dir) and lib_dir not in extra:
+                    extra.append(lib_dir)
+        if extra:
+            current = os.environ.get('LD_LIBRARY_PATH', '')
+            os.environ['LD_LIBRARY_PATH'] = ':'.join(extra) + (':' + current if current else '')
+        os.environ['_ONNX_NVIDIA_LD_PATH_DONE'] = '1'
+    except Exception as e:
+        logging.debug('无法补全 NVIDIA 库路径: %s', e)
+
+
+def _cuda_provider_candidates(device_id: int) -> List[List]:
+    """按优先级返回 CUDA provider 配置；简单配置优先，避免 EXHAUSTIVE 导致静默回退 CPU。"""
+    device_id = int(device_id)
+    return [
+        ['CUDAExecutionProvider', 'CPUExecutionProvider'],
+        [
+            ('CUDAExecutionProvider', {'device_id': device_id}),
+            'CPUExecutionProvider',
+        ],
+        [
+            (
+                'CUDAExecutionProvider',
+                {
+                    'device_id': device_id,
+                    'arena_extend_strategy': 'kNextPowerOfTwo',
+                    'cudnn_conv_algo_search': 'HEURISTIC',
+                    'do_copy_in_default_stream': True,
+                },
+            ),
+            'CPUExecutionProvider',
+        ],
+    ]
+
+
+def _create_onnx_session(model_path: str, providers: List) -> Any:
+    return ort.InferenceSession(model_path, providers=providers)
 
 
 def calculate_iou(box, other_boxes):
@@ -222,34 +276,45 @@ class ONNXInference:
         return use_gpu and self.device_id is not None
 
     def _init_model(self):
+        _prepend_nvidia_lib_paths()
         available_providers = ort.get_available_providers()
         logging.info("ONNX Runtime可用执行提供者: %s", available_providers)
 
+        session = None
         if not self._should_use_gpu() or 'CUDAExecutionProvider' not in available_providers:
-            session = ort.InferenceSession(self.onnx_model_path, providers=['CPUExecutionProvider'])
+            session = _create_onnx_session(self.onnx_model_path, ['CPUExecutionProvider'])
             logging.info("ONNX 使用 CPUExecutionProvider 初始化")
         else:
-            cuda_providers = [
-                (
-                    'CUDAExecutionProvider',
-                    {
-                        'device_id': int(self.device_id),
-                        'arena_extend_strategy': 'kNextPowerOfTwo',
-                        'gpu_mem_limit': 2 * 1024 * 1024 * 1024,
-                        'cudnn_conv_algo_search': 'EXHAUSTIVE',
-                        'do_copy_in_default_stream': True,
-                    },
-                ),
-                'CPUExecutionProvider',
-            ]
-            try:
-                session = ort.InferenceSession(self.onnx_model_path, providers=cuda_providers)
-                if 'CUDAExecutionProvider' not in session.get_providers():
-                    raise RuntimeError('CUDAExecutionProvider 未生效')
-                logging.info("ONNX 使用 CUDAExecutionProvider 初始化 (device_id=%s)", self.device_id)
-            except Exception as e:
-                logging.warning("CUDA 初始化失败，回退 CPU: %s", e)
-                session = ort.InferenceSession(self.onnx_model_path, providers=['CPUExecutionProvider'])
+            last_error: Optional[Exception] = None
+            for idx, cuda_providers in enumerate(_cuda_provider_candidates(self.device_id)):
+                try:
+                    candidate = _create_onnx_session(self.onnx_model_path, cuda_providers)
+                    used = candidate.get_providers()
+                    if 'CUDAExecutionProvider' in used:
+                        session = candidate
+                        logging.info(
+                            "ONNX 使用 CUDAExecutionProvider 初始化 (device_id=%s, strategy=%s, providers=%s)",
+                            self.device_id,
+                            idx,
+                            used,
+                        )
+                        break
+                    last_error = RuntimeError(f'CUDAExecutionProvider 未生效, providers={used}')
+                    logging.debug(
+                        "ONNX CUDA 策略 %s 未生效，尝试下一套配置: %s",
+                        idx,
+                        used,
+                    )
+                except Exception as e:
+                    last_error = e
+                    logging.debug("ONNX CUDA 策略 %s 初始化异常: %s", idx, e)
+
+            if session is None:
+                logging.warning(
+                    "CUDA 初始化失败，回退 CPU: %s",
+                    last_error or '所有 CUDA 策略均未生效',
+                )
+                session = _create_onnx_session(self.onnx_model_path, ['CPUExecutionProvider'])
 
         model_inputs = session.get_inputs()
         input_shape = model_inputs[0].shape

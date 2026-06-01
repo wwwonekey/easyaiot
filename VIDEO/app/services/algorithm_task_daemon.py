@@ -426,9 +426,11 @@ class AlgorithmTaskDaemon:
             'DATABASE_URL', 'GATEWAY_URL', 'GB28181_SERVICE_URL', 'JWT_TOKEN',
             'GB28181_HTTP_READ_TIMEOUT', 'GB28181_PLAY_PROTOCOL', 'GB28181_HEVC_RTSP_FIRST',
             'GB28181_OPENCV_RTMP_FALLBACK_RTSP', 'POD_IP', 'HOST_IP',
+            'USE_GPU', 'GPU_IDS', 'GPU_POLICY', 'INFER_GPU_POLICY', 'FFMPEG_GPU_POLICY',
+            'CUDA_VISIBLE_DEVICES', 'NVIDIA_VISIBLE_DEVICES', 'ORT_EXECUTION_PROVIDERS',
         ):
             val = os.getenv(key)
-            if val:
+            if val is not None and val != '':
                 env[key] = val
         # 重要：设置 PYTHONUNBUFFERED，确保输出实时（与 AI 模块保持一致）
         env['PYTHONUNBUFFERED'] = '1'
@@ -464,6 +466,7 @@ class AlgorithmTaskDaemon:
         self._log(
             f'环境变量已设置: TASK_ID={env["TASK_ID"]}, VIDEO_SERVICE_PORT={env["VIDEO_SERVICE_PORT"]}, '
             f'KAFKA_BOOTSTRAP_SERVERS={env["KAFKA_BOOTSTRAP_SERVERS"]}, '
+            f'USE_GPU={env.get("USE_GPU", "")}, CUDA_VISIBLE_DEVICES={env.get("CUDA_VISIBLE_DEVICES", "")}, '
             f'GATEWAY_URL={env.get("GATEWAY_URL", "")}, '
             f'GB28181_SERVICE_URL={env.get("GB28181_SERVICE_URL", "")}',
             'DEBUG',
