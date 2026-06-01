@@ -1,11 +1,14 @@
 <template>
   <DeviceCreatePanelLayout result-title="接入参数">
     <template #form>
-      <BasicForm @register="registerForm" />
-    </template>
-    <template #actions>
-      <Button type="primary" :loading="regenLoading" @click="handleRegenerate">生成配置</Button>
-      <Button v-if="content" pre-icon="ant-design:copy-outlined" @click="copyContent">复制全部</Button>
+      <BasicForm @register="registerForm">
+        <template #submitBefore>
+          <Button type="primary" :loading="regenLoading" class="mr-2" @click="handleRegenerate">
+            生成配置
+          </Button>
+          <Button v-if="content" pre-icon="ant-design:copy-outlined" @click="copyContent">复制全部</Button>
+        </template>
+      </BasicForm>
     </template>
     <template #result>
       <Row v-if="parsedGroups.length > 0" :gutter="[12, 12]">
@@ -43,6 +46,11 @@ const regenLoading = ref(false);
 
 const [registerForm, { getFieldsValue }] = useForm({
   ...DEVICE_CREATE_FORM_GRID,
+  showActionButtonGroup: true,
+  showResetButton: false,
+  showSubmitButton: false,
+  showAdvancedButton: false,
+  actionColOptions: { span: 12, style: { textAlign: 'left' } },
   schemas: [
     {
       field: 'generateCount',
