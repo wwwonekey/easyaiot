@@ -14,6 +14,8 @@ from models import Device, FaceAutoEnrollTask, FaceLibrary, db
 
 logger = logging.getLogger(__name__)
 
+FACE_AUTO_ENROLL_JOB_ID = 'face_auto_enroll_tick'
+
 
 def _task_to_dict(task: FaceAutoEnrollTask) -> Dict[str, Any]:
     device_ids: List[str] = []
@@ -110,6 +112,7 @@ def start_auto_enroll(library_id: int) -> Dict[str, Any]:
     task.last_tick_at = None
     task.updated_at = now
     db.session.commit()
+    _ensure_scheduler_job()
     return _task_to_dict(task)
 
 
@@ -120,7 +123,46 @@ def stop_auto_enroll(library_id: int) -> Dict[str, Any]:
     task.is_running = False
     task.updated_at = datetime.utcnow()
     db.session.commit()
+    _maybe_remove_scheduler_job()
     return _task_to_dict(task)
+
+
+def _ensure_scheduler_job() -> None:
+    from flask import current_app
+    from app.services.camera_service import scheduler
+
+    if scheduler.get_job(FACE_AUTO_ENROLL_JOB_ID):
+        return
+    if not scheduler.running:
+        scheduler.start()
+    app = current_app._get_current_object()
+
+    def wrapper():
+        try:
+            with app.app_context():
+                run_auto_enroll_tick()
+                _maybe_remove_scheduler_job()
+        except Exception as exc:
+            logger.warning('人脸自动录入 tick 失败: %s', exc)
+
+    scheduler.add_job(
+        wrapper,
+        'interval',
+        seconds=5,
+        id=FACE_AUTO_ENROLL_JOB_ID,
+        replace_existing=True,
+    )
+    logger.info('人脸库自动录入调度已启动（手动开启后生效）')
+
+
+def _maybe_remove_scheduler_job() -> None:
+    from app.services.camera_service import scheduler
+
+    if FaceAutoEnrollTask.query.filter_by(is_running=True).count() > 0:
+        return
+    if scheduler.get_job(FACE_AUTO_ENROLL_JOB_ID):
+        scheduler.remove_job(FACE_AUTO_ENROLL_JOB_ID)
+        logger.info('人脸库自动录入调度已停止（无运行中任务）')
 
 
 def _stop_expired_task(task: FaceAutoEnrollTask) -> None:

@@ -128,6 +128,7 @@ class Alert(db.Model):
     channels = db.Column(db.Text, nullable=True, comment='通知渠道配置（JSON格式，格式：[{"method": "sms", "template_id": "xxx"}, ...]）')
     notification_sent = db.Column(db.Boolean, default=False, nullable=False, comment='是否已发送通知')
     notification_sent_time = db.Column(db.DateTime, nullable=True, comment='通知发送时间')
+    business_tags = db.Column(db.Text, nullable=True, comment='业务标签（JSON数组，库匹配告警携带匹配库标签）')
 
 
 class SnapSpace(db.Model):
@@ -633,8 +634,11 @@ class AlgorithmTask(db.Model):
     face_detection_enabled = db.Column(db.Boolean, default=True, nullable=False, comment='是否启用人脸检测')
     plate_detection_enabled = db.Column(db.Boolean, default=True, nullable=False, comment='是否启用车牌检测')
     face_matching_enabled = db.Column(db.Boolean, default=False, nullable=False, comment='是否启用人脸匹配（默认关闭）')
-    face_library_id = db.Column(db.Integer, db.ForeignKey('face_library.id', ondelete='SET NULL'), nullable=True, comment='关联人脸库ID')
+    face_library_ids = db.Column(db.Text, nullable=True, comment='关联人脸库ID列表（JSON数组，多库匹配）')
     face_matching_threshold = db.Column(db.Float, nullable=True, comment='人脸匹配相似度阈值（为空则使用人脸库默认值）')
+    plate_matching_enabled = db.Column(db.Boolean, default=False, nullable=False, comment='是否启用车牌匹配（默认关闭）')
+    plate_library_ids = db.Column(db.Text, nullable=True, comment='关联车牌库ID列表（JSON数组，多库匹配）')
+    matching_business_tags = db.Column(db.Text, nullable=True, comment='匹配业务标签（JSON数组，透传子任务/告警）')
     
     # 告警通知配置
     alert_notification_enabled = db.Column(db.Boolean, default=False, nullable=False, comment='是否启用告警通知')
@@ -680,12 +684,45 @@ class AlgorithmTask(db.Model):
     # 关联关系
     devices = db.relationship('Device', secondary=algorithm_task_device, backref='algorithm_task_list', lazy=True)  # 多对多关系
     snap_space = db.relationship('SnapSpace', backref='algorithm_tasks', lazy=True)
-    face_library = db.relationship('FaceLibrary', backref='algorithm_tasks', lazy=True)
     # 算法模型服务关联（通过task_id关联）
     algorithm_services = db.relationship('AlgorithmModelService', backref='algorithm_task', lazy=True, cascade='all, delete-orphan')
     # 检测区域关联（通过task_id关联，支持统一后的算法任务，不使用数据库外键约束）
     # 注意：关系在文件末尾使用实际列对象配置
     
+    def _parse_matching_business_tags(self):
+        import json
+        if not self.matching_business_tags:
+            return []
+        try:
+            tags = json.loads(self.matching_business_tags) if isinstance(self.matching_business_tags, str) else self.matching_business_tags
+            return tags if isinstance(tags, list) else []
+        except Exception:
+            return []
+
+    @staticmethod
+    def _parse_library_ids(raw) -> list:
+        import json
+        if not raw:
+            return []
+        try:
+            parsed = json.loads(raw) if isinstance(raw, str) else raw
+            if isinstance(parsed, list):
+                return [int(x) for x in parsed if x is not None and str(x).strip() != '']
+        except Exception:
+            pass
+        return []
+
+    @staticmethod
+    def _resolve_library_names(library_ids, library_model):
+        if not library_ids:
+            return []
+        names = []
+        for lib_id in library_ids:
+            lib = library_model.query.get(lib_id)
+            if lib:
+                names.append(lib.name)
+        return names
+
     def to_dict(self):
         """转换为字典"""
         import json
@@ -729,9 +766,19 @@ class AlgorithmTask(db.Model):
             'face_detection_enabled': self.face_detection_enabled,
             'plate_detection_enabled': self.plate_detection_enabled,
             'face_matching_enabled': self.face_matching_enabled,
-            'face_library_id': self.face_library_id,
-            'face_library_name': self.face_library.name if self.face_library else None,
+            'face_library_ids': self._parse_library_ids(self.face_library_ids),
+            'face_library_names': self._resolve_library_names(
+                self._parse_library_ids(self.face_library_ids),
+                FaceLibrary,
+            ),
             'face_matching_threshold': self.face_matching_threshold,
+            'plate_matching_enabled': self.plate_matching_enabled,
+            'plate_library_ids': self._parse_library_ids(self.plate_library_ids),
+            'plate_library_names': self._resolve_library_names(
+                self._parse_library_ids(self.plate_library_ids),
+                PlateLibrary,
+            ),
+            'matching_business_tags': self._parse_matching_business_tags(),
             'alert_notification_enabled': self.alert_notification_enabled,
             'alert_notification_config': json.loads(self.alert_notification_config) if self.alert_notification_config else None,
             'alarm_suppress_time': self.alarm_suppress_time,
@@ -978,6 +1025,183 @@ class FaceMatchRecord(db.Model):
             'similarity': self.similarity,
             'threshold': self.threshold,
             'candidates': candidates,
+            'alert_id': self.alert_id,
+            'task_type': self.task_type,
+            'status': self.status,
+            'error_message': self.error_message,
+            'created_at': utc_isoformat_z(self.created_at),
+        }
+
+
+class PlateLibrary(db.Model):
+    """车牌库（供算法任务车牌匹配使用）"""
+    __tablename__ = 'plate_library'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    name = db.Column(db.String(255), nullable=False, comment='车牌库名称')
+    code = db.Column(db.String(100), nullable=False, unique=True, comment='车牌库编码（唯一）')
+    business_tags = db.Column(db.Text, nullable=True, comment='业务标签（JSON数组）')
+    description = db.Column(db.String(500), nullable=True, comment='描述')
+    is_enabled = db.Column(db.Boolean, default=True, nullable=False, comment='是否启用')
+    plate_count = db.Column(db.Integer, default=0, nullable=False, comment='车牌数量（冗余统计）')
+    created_at = db.Column(db.DateTime, default=lambda: datetime.utcnow())
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.utcnow(), onupdate=lambda: datetime.utcnow())
+
+    entries = db.relationship('PlateEntry', backref='library', lazy=True, cascade='all, delete-orphan')
+
+    def to_dict(self, include_entries: bool = False):
+        import json
+        tags = []
+        if self.business_tags:
+            try:
+                tags = json.loads(self.business_tags) if isinstance(self.business_tags, str) else self.business_tags
+            except Exception:
+                tags = []
+        data = {
+            'id': self.id,
+            'name': self.name,
+            'code': self.code,
+            'business_tags': tags,
+            'description': self.description,
+            'is_enabled': self.is_enabled,
+            'plate_count': self.plate_count,
+            'created_at': utc_isoformat_z(self.created_at),
+            'updated_at': utc_isoformat_z(self.updated_at),
+        }
+        if include_entries:
+            data['entries'] = [e.to_dict() for e in (self.entries or [])]
+        return data
+
+
+class PlateEntry(db.Model):
+    """车牌库中的车牌条目"""
+    __tablename__ = 'plate_entry'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    library_id = db.Column(db.Integer, db.ForeignKey('plate_library.id', ondelete='CASCADE'), nullable=False, comment='所属车牌库ID')
+    plate_no = db.Column(db.String(20), nullable=False, comment='车牌号码')
+    plate_color = db.Column(db.String(20), nullable=True, comment='车牌颜色')
+    owner_name = db.Column(db.String(255), nullable=True, comment='车主姓名')
+    owner_phone = db.Column(db.String(50), nullable=True, comment='车主电话')
+    image_path = db.Column(db.String(500), nullable=True, comment='车牌图片本地路径')
+    image_url = db.Column(db.String(500), nullable=True, comment='车牌图片URL（MinIO）')
+    remark = db.Column(db.String(500), nullable=True, comment='备注')
+    is_enabled = db.Column(db.Boolean, default=True, nullable=False, comment='是否启用')
+    created_at = db.Column(db.DateTime, default=lambda: datetime.utcnow())
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.utcnow(), onupdate=lambda: datetime.utcnow())
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'library_id': self.library_id,
+            'plate_no': self.plate_no,
+            'plate_color': self.plate_color,
+            'owner_name': self.owner_name,
+            'owner_phone': self.owner_phone,
+            'image_path': self.image_path,
+            'image_url': self.image_url,
+            'remark': self.remark,
+            'is_enabled': self.is_enabled,
+            'created_at': utc_isoformat_z(self.created_at),
+            'updated_at': utc_isoformat_z(self.updated_at),
+        }
+
+
+class PlateAutoEnrollTask(db.Model):
+    """车牌库自动录入任务（绑定摄像头，限时采集新车牌）"""
+    __tablename__ = 'plate_auto_enroll_task'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    library_id = db.Column(
+        db.Integer, db.ForeignKey('plate_library.id', ondelete='CASCADE'),
+        nullable=False, unique=True, comment='所属车牌库ID',
+    )
+    device_ids = db.Column(db.Text, nullable=False, default='[]', comment='绑定的摄像头ID列表（JSON数组）')
+    duration_minutes = db.Column(db.Integer, default=60, nullable=False, comment='录入模式开启时长（分钟）')
+    capture_interval_sec = db.Column(db.Integer, default=5, nullable=False, comment='抓帧间隔（秒）')
+    is_running = db.Column(db.Boolean, default=False, nullable=False, comment='是否正在运行')
+    started_at = db.Column(db.DateTime, nullable=True, comment='本次启动时间')
+    expires_at = db.Column(db.DateTime, nullable=True, comment='本次到期时间')
+    enrolled_count = db.Column(db.Integer, default=0, nullable=False, comment='本次已录入数量')
+    skipped_count = db.Column(db.Integer, default=0, nullable=False, comment='本次跳过数量（已存在或重复）')
+    last_device_index = db.Column(db.Integer, default=0, nullable=False, comment='轮询摄像头索引')
+    last_tick_at = db.Column(db.DateTime, nullable=True, comment='上次抓帧时间')
+    created_at = db.Column(db.DateTime, default=lambda: datetime.utcnow())
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.utcnow(), onupdate=lambda: datetime.utcnow())
+
+    library = db.relationship('PlateLibrary', backref=db.backref('auto_enroll_task', uselist=False), lazy=True)
+
+    def to_dict(self):
+        import json
+        device_ids = []
+        try:
+            device_ids = json.loads(self.device_ids) if isinstance(self.device_ids, str) else (self.device_ids or [])
+        except Exception:
+            device_ids = []
+        device_names = []
+        if device_ids:
+            devices = Device.query.filter(Device.id.in_(device_ids)).all()
+            name_map = {d.id: d.name for d in devices}
+            device_names = [name_map.get(did, did) for did in device_ids]
+        return {
+            'id': self.id,
+            'library_id': self.library_id,
+            'device_ids': device_ids,
+            'device_names': device_names,
+            'duration_minutes': self.duration_minutes,
+            'capture_interval_sec': self.capture_interval_sec,
+            'is_running': self.is_running,
+            'started_at': utc_isoformat_z(self.started_at),
+            'expires_at': utc_isoformat_z(self.expires_at),
+            'enrolled_count': self.enrolled_count,
+            'skipped_count': self.skipped_count,
+            'last_device_index': self.last_device_index,
+            'last_tick_at': utc_isoformat_z(self.last_tick_at),
+            'created_at': utc_isoformat_z(self.created_at),
+            'updated_at': utc_isoformat_z(self.updated_at),
+        }
+
+
+class PlateMatchRecord(db.Model):
+    """车牌匹配记录（Kafka消费端写入）"""
+    __tablename__ = 'plate_match_record'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    task_id = db.Column(db.Integer, nullable=True, comment='算法任务ID')
+    task_name = db.Column(db.String(255), nullable=True, comment='算法任务名称')
+    device_id = db.Column(db.String(100), nullable=False, comment='设备ID')
+    device_name = db.Column(db.String(255), nullable=True, comment='设备名称')
+    library_id = db.Column(db.Integer, nullable=True, comment='车牌库ID')
+    library_name = db.Column(db.String(255), nullable=True, comment='车牌库名称')
+    plate_no = db.Column(db.String(20), nullable=True, comment='识别出的车牌号')
+    plate_color = db.Column(db.String(20), nullable=True, comment='识别出的车牌颜色')
+    plate_image_path = db.Column(db.String(500), nullable=True, comment='车牌裁剪图路径')
+    matched = db.Column(db.Boolean, default=False, nullable=False, comment='是否在库中匹配成功')
+    matched_plate_entry_id = db.Column(db.Integer, nullable=True, comment='匹配到的车牌条目ID')
+    matched_owner_name = db.Column(db.String(255), nullable=True, comment='匹配到的车主姓名')
+    detect_conf = db.Column(db.Float, nullable=True, comment='识别置信度')
+    alert_id = db.Column(db.Integer, nullable=True, comment='关联告警ID')
+    task_type = db.Column(db.String(20), nullable=True, comment='任务类型')
+    status = db.Column(db.String(20), default='pending', nullable=False, comment='处理状态[pending,success,failed]')
+    error_message = db.Column(db.String(500), nullable=True, comment='错误信息')
+    created_at = db.Column(db.DateTime, default=lambda: datetime.utcnow())
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'task_id': self.task_id,
+            'task_name': self.task_name,
+            'device_id': self.device_id,
+            'device_name': self.device_name,
+            'library_id': self.library_id,
+            'library_name': self.library_name,
+            'plate_no': self.plate_no,
+            'plate_color': self.plate_color,
+            'plate_image_path': self.plate_image_path,
+            'matched': self.matched,
+            'matched_plate_entry_id': self.matched_plate_entry_id,
+            'matched_owner_name': self.matched_owner_name,
+            'detect_conf': self.detect_conf,
             'alert_id': self.alert_id,
             'task_type': self.task_type,
             'status': self.status,

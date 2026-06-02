@@ -496,19 +496,20 @@ def publish_face_matching():
         from app.services.face_matching_kafka_service import build_face_matching_message, send_face_matching_to_kafka
 
         data = request.get_json(silent=True) or {}
-        library_id = data.get('libraryId') or data.get('library_id')
+        task_id = data.get('taskId') or data.get('task_id')
         face_image_path = data.get('faceImagePath') or data.get('face_image_path')
-        if not library_id:
-            return jsonify({"code": 400, "msg": "libraryId 不能为空"}), 400
+        if not task_id:
+            return jsonify({"code": 400, "msg": "taskId 不能为空"}), 400
         if not face_image_path:
             return jsonify({"code": 400, "msg": "faceImagePath 不能为空"}), 400
+        library_id = data.get('libraryId') or data.get('library_id')
         message = build_face_matching_message(
-            task_id=data.get('taskId') or data.get('task_id') or 0,
+            task_id=int(task_id),
             task_name=data.get('taskName') or data.get('task_name') or '',
             task_type=data.get('taskType') or data.get('task_type') or 'realtime',
             device_id=data.get('deviceId') or data.get('device_id') or '',
             device_name=data.get('deviceName') or data.get('device_name'),
-            library_id=int(library_id),
+            library_id=int(library_id) if library_id is not None else None,
             library_name=data.get('libraryName') or data.get('library_name'),
             face_image_path=face_image_path,
             threshold=data.get('threshold') or data.get('faceMatchingThreshold') or data.get('face_matching_threshold'),

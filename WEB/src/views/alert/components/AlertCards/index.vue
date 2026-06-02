@@ -29,11 +29,14 @@
               <div class="alert-info">
                 <div class="title-wrapper">
                   <div class="title o2">
-                    <span class="event-name">{{ item.event || '未知事件' }}</span>
+                    <span class="event-name">{{ formatAlertEvent(item.event) }}</span>
                   </div>
                   <span class="task-type-tag" :class="getTaskTypeClass(item)">
                     {{ getTaskTypeText(item) }}
                   </span>
+                </div>
+                <div v-if="item.business_tags?.length" class="alert-business-tags">
+                  <a-tag v-for="tag in item.business_tags" :key="tag" color="blue" size="small">{{ tag }}</a-tag>
                 </div>
                 <div class="props">
                   <div class="flex" style="justify-content: space-between;">
@@ -95,6 +98,7 @@ import { Icon } from '@/components/Icon';
 import moment from 'moment';
 import ALERT from "@/assets/images/alert/alert.png";
 import { alertCameraSelectProps } from '@/views/alert/Data';
+import { ALERT_EVENT_OPTIONS, formatAlertEvent, normalizeAlertBusinessTagsParam } from '@/views/alert/alertDisplay';
 import { resolveAlertImageDisplayUrl } from '@/utils/alertMinioImage';
 
 const ListItem = List.Item;
@@ -146,6 +150,12 @@ function processFormData(formData: Record<string, any>): Record<string, any> {
     processedData.task_name = String(processedData.task_name).trim();
     if (!processedData.task_name) delete processedData.task_name;
   }
+  const businessTagsParam = normalizeAlertBusinessTagsParam(processedData.business_tags);
+  if (businessTagsParam) {
+    processedData.business_tags = businessTagsParam;
+  } else {
+    delete processedData.business_tags;
+  }
   const route = router.currentRoute.value;
   if (route.query.task_name && !processedData.task_name) {
     processedData.task_name = String(route.query.task_name).trim();
@@ -187,6 +197,9 @@ function snapshotFilters(processedData: Record<string, any>): Record<string, any
   }
   if (processedData.event !== undefined && processedData.event !== null && processedData.event !== '') {
     filterParams.event = processedData.event;
+  }
+  if (processedData.business_tags) {
+    filterParams.business_tags = processedData.business_tags;
   }
   return filterParams;
 }
@@ -314,12 +327,21 @@ const [registerForm, { validate, setFieldsValue, getFieldsValue }] = useForm({
       label: `告警事件`,
       component: 'Select',
       componentProps: {
-        options: [
-          {value: null, label: '全部'},
-          {value: "行人检测", label: "行人检测"},
-        ]
+        options: [...ALERT_EVENT_OPTIONS],
       },
       defaultValue: null,
+      colProps: { span: 8 },
+    },
+    {
+      field: 'business_tags',
+      label: '业务标签',
+      component: 'Select',
+      componentProps: {
+        mode: 'tags',
+        placeholder: '输入标签后回车，支持多个',
+        tokenSeparators: [','],
+        open: false,
+      },
       colProps: { span: 8 },
     },
     {
@@ -685,6 +707,14 @@ function thumbUrl(imageUrl: string | null | undefined): string {
             }
           }
         }
+      }
+
+      .alert-business-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        margin-bottom: 8px;
+        padding-left: 0;
       }
 
       .props {

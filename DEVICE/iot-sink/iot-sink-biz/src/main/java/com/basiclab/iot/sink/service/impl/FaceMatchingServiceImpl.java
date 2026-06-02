@@ -41,8 +41,8 @@ public class FaceMatchingServiceImpl implements FaceMatchingService {
         if (message == null) {
             throw new IllegalArgumentException("人脸匹配消息为空");
         }
-        if (message.getLibraryId() == null) {
-            throw new IllegalArgumentException("libraryId 不能为空");
+        if (message.getTaskId() == null) {
+            throw new IllegalArgumentException("taskId 不能为空");
         }
         if (message.getFaceImagePath() == null || message.getFaceImagePath().isEmpty()) {
             throw new IllegalArgumentException("faceImagePath 不能为空");

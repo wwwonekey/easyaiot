@@ -53,6 +53,14 @@ from app.utils.face_capture_queue_service import (
     FACE_CAPTURE_QUEUE_SIZE,
     FACE_CAPTURE_WORKER_THREADS,
 )
+from app.utils.plate_capture_queue_service import (
+    enqueue_plate_capture,
+    is_running as plate_capture_queue_running,
+    start_plate_capture_workers,
+    stop_plate_capture_workers,
+    PLATE_CAPTURE_QUEUE_SIZE,
+    PLATE_CAPTURE_WORKER_THREADS,
+)
 
 
 def _parse_gpu_id_list(value: str) -> List[int]:
@@ -287,10 +295,12 @@ if GATEWAY_URL and GATEWAY_URL != 'http://localhost:48080':
     # 使用网关地址构建hook URL
     ALERT_HOOK_URL = f"{GATEWAY_URL}/video/alert/hook"
     FACE_MATCHING_PUBLISH_URL = f"{GATEWAY_URL}/video/face/matching/publish"
+    PLATE_MATCHING_PUBLISH_URL = f"{GATEWAY_URL}/video/plate/matching/publish"
 else:
     # 回退到使用VIDEO_SERVICE_PORT（本地开发环境）
     ALERT_HOOK_URL = f"http://localhost:{VIDEO_SERVICE_PORT}/video/alert/hook"
     FACE_MATCHING_PUBLISH_URL = f"http://localhost:{VIDEO_SERVICE_PORT}/video/face/matching/publish"
+    PLATE_MATCHING_PUBLISH_URL = f"http://localhost:{VIDEO_SERVICE_PORT}/video/plate/matching/publish"
 
 # 数据库会话
 engine = create_engine(DATABASE_URL)
@@ -1410,6 +1420,12 @@ def try_send_alert_for_detections(
             frame_for_image=frame_for_image,
             frame_number=frame_number,
         )
+        try_send_plate_matching_for_frame(
+            device_id=device_id,
+            device_name=device_name,
+            frame_for_image=frame_for_image,
+            frame_number=frame_number,
+        )
         extra = f" {log_suffix}" if log_suffix else ""
         logger.info(f"📨 已发送告警事件{extra}：帧 {frame_number}，{len(detections)} 个目标（{object_counts}）")
     except Exception as e:
@@ -1527,9 +1543,12 @@ def _resolve_face_matching_threshold() -> Optional[float]:
     threshold = getattr(task_config, 'face_matching_threshold', None)
     if threshold is not None:
         return float(threshold)
-    library = getattr(task_config, 'face_library', None)
-    if library is not None and getattr(library, 'similarity_threshold', None) is not None:
-        return float(library.similarity_threshold)
+    from models import AlgorithmTask, FaceLibrary
+    lib_ids = AlgorithmTask._parse_library_ids(getattr(task_config, 'face_library_ids', None))
+    if lib_ids:
+        library = FaceLibrary.query.get(lib_ids[0])
+        if library is not None and getattr(library, 'similarity_threshold', None) is not None:
+            return float(library.similarity_threshold)
     return None
 
 
@@ -1542,18 +1561,14 @@ def try_send_face_matching_for_frame(
     """启用人脸匹配时，将帧送入独立人脸抓取队列（不阻塞主算法链路）"""
     if not task_config or not bool(getattr(task_config, 'face_matching_enabled', False)):
         return
-    library_id = getattr(task_config, 'face_library_id', None)
-    if not library_id:
+    from models import AlgorithmTask
+    library_ids = AlgorithmTask._parse_library_ids(getattr(task_config, 'face_library_ids', None))
+    if not library_ids:
         logger.warning("人脸匹配已开启但未配置人脸库，跳过投递")
         return
     if not face_capture_queue_running():
         logger.warning("人脸抓取队列未启动，跳过帧 %s", frame_number)
         return
-
-    library_name = None
-    library = getattr(task_config, 'face_library', None)
-    if library is not None:
-        library_name = getattr(library, 'name', None)
 
     enqueue_face_capture(
         frame=frame_for_image,
@@ -1563,10 +1578,40 @@ def try_send_face_matching_for_frame(
         task_id=TASK_ID,
         task_name=getattr(task_config, 'task_name', ''),
         task_type='realtime',
-        library_id=library_id,
-        library_name=library_name,
+        library_ids=library_ids,
         threshold=_resolve_face_matching_threshold(),
         publish_url=FACE_MATCHING_PUBLISH_URL,
+    )
+
+
+def try_send_plate_matching_for_frame(
+    device_id: str,
+    device_name: str,
+    frame_for_image: np.ndarray,
+    frame_number: int,
+) -> None:
+    """启用车牌匹配时，将帧送入独立车牌抓取队列（不阻塞主算法链路）"""
+    if not task_config or not bool(getattr(task_config, 'plate_matching_enabled', False)):
+        return
+    from models import AlgorithmTask
+    library_ids = AlgorithmTask._parse_library_ids(getattr(task_config, 'plate_library_ids', None))
+    if not library_ids:
+        logger.warning("车牌匹配已开启但未配置车牌库，跳过投递")
+        return
+    if not plate_capture_queue_running():
+        logger.warning("车牌抓取队列未启动，跳过帧 %s", frame_number)
+        return
+
+    enqueue_plate_capture(
+        frame=frame_for_image,
+        device_id=device_id,
+        device_name=device_name,
+        frame_number=frame_number,
+        task_id=TASK_ID,
+        task_name=getattr(task_config, 'task_name', ''),
+        task_type='realtime',
+        library_ids=library_ids,
+        publish_url=PLATE_MATCHING_PUBLISH_URL,
     )
 
 
@@ -3302,6 +3347,7 @@ def shutdown_yolo_workers(timeout: float = 8.0):
     alert_executor = None
 
     stop_face_capture_workers()
+    stop_plate_capture_workers()
 
     yolo_models.clear()
     yolo_model_devices.clear()
@@ -3475,6 +3521,15 @@ def main():
         start_face_capture_workers(stop_event)
     else:
         logger.info("👤 人脸匹配未启用，跳过人脸抓取队列")
+
+    if task_config and bool(getattr(task_config, 'plate_matching_enabled', False)):
+        logger.info(
+            f"🚗 启动车牌抓取独立队列: size={PLATE_CAPTURE_QUEUE_SIZE}, "
+            f"workers={PLATE_CAPTURE_WORKER_THREADS}"
+        )
+        start_plate_capture_workers(stop_event)
+    else:
+        logger.info("🚗 车牌匹配未启用，跳过车牌抓取队列")
 
     # 启动心跳上报线程
     logger.info("💓 启动心跳上报线程...")

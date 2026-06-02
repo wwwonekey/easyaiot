@@ -86,9 +86,9 @@ def _publish_face_matching(payload: Dict[str, Any], publish_url: str) -> None:
         )
         if response.status_code == 200:
             logger.info(
-                "人脸匹配消息已投递: device_id=%s, library_id=%s, path=%s",
+                "人脸匹配消息已投递: device_id=%s, task_id=%s, path=%s",
                 payload.get('deviceId'),
-                payload.get('libraryId'),
+                payload.get('taskId'),
                 payload.get('faceImagePath'),
             )
         else:
@@ -130,8 +130,6 @@ def _process_task(task: Dict[str, Any]) -> None:
             'taskType': task.get('task_type', 'realtime'),
             'deviceId': device_id,
             'deviceName': task.get('device_name', device_id),
-            'libraryId': task.get('library_id'),
-            'libraryName': task.get('library_name'),
             'faceImagePath': face_path,
             'threshold': task.get('threshold'),
             'bbox': det.get('bbox'),
@@ -188,8 +186,7 @@ def enqueue_face_capture(
     task_id: int,
     task_name: str,
     task_type: str,
-    library_id: int,
-    library_name: Optional[str],
+    library_ids: list,
     threshold: Optional[float],
     publish_url: str,
 ) -> bool:
@@ -204,8 +201,7 @@ def enqueue_face_capture(
         'task_id': task_id,
         'task_name': task_name,
         'task_type': task_type,
-        'library_id': library_id,
-        'library_name': library_name,
+        'library_ids': library_ids,
         'threshold': threshold,
         'publish_url': publish_url,
         'frame': frame.copy(),

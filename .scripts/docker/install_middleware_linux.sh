@@ -3939,33 +3939,40 @@ wait_for_kafka() {
     return 1
 }
 
-# 摄像头告警相关 Kafka 主题（分区数，与 docker-compose KAFKA_NUM_PARTITIONS 一致）
-KAFKA_ALERT_TOPIC_PARTITIONS="${KAFKA_ALERT_TOPIC_PARTITIONS:-64}"
-KAFKA_ALERT_TOPICS=(
+# IoT 业务 Kafka 主题（分区数，与 docker-compose KAFKA_NUM_PARTITIONS 一致）
+KAFKA_IOT_TOPIC_PARTITIONS="${KAFKA_IOT_TOPIC_PARTITIONS:-${KAFKA_ALERT_TOPIC_PARTITIONS:-64}}"
+KAFKA_ALERT_TOPIC_PARTITIONS="${KAFKA_IOT_TOPIC_PARTITIONS}"
+KAFKA_IOT_TOPICS=(
     "iot-alert-notification"
     "iot-alert-notification-send"
     "iot-snapshot-alert"
     "iot-snapshot-alert-notification-send"
+    "iot-face-matching"
+    "iot-face-matching-result"
+    "iot-plate-matching"
+    "iot-plate-matching-result"
 )
+# 兼容旧变量名
+KAFKA_ALERT_TOPICS=("${KAFKA_IOT_TOPICS[@]}")
 
-# 创建或扩容告警 Kafka 主题至指定分区数
-init_kafka_alert_topics() {
+# 创建或扩容 IoT Kafka 主题至指定分区数（告警 / 人脸匹配 / 车牌匹配）
+init_kafka_iot_topics() {
     local topic partitions current_partitions alter_output create_output describe_output
 
     if ! docker ps --filter "name=kafka-server" --format "{{.Names}}" | grep -q "kafka-server"; then
-        print_warning "Kafka 容器未运行，跳过告警主题初始化"
+        print_warning "Kafka 容器未运行，跳过 IoT 主题初始化"
         return 1
     fi
 
     wait_for_kafka || {
-        print_warning "Kafka 未就绪，跳过告警主题初始化"
+        print_warning "Kafka 未就绪，跳过 IoT 主题初始化"
         return 1
     }
 
-    partitions="${KAFKA_ALERT_TOPIC_PARTITIONS}"
-    print_info "初始化告警 Kafka 主题（目标分区数: ${partitions}）..."
+    partitions="${KAFKA_IOT_TOPIC_PARTITIONS}"
+    print_info "初始化 IoT Kafka 主题（目标分区数: ${partitions}）..."
 
-    for topic in "${KAFKA_ALERT_TOPICS[@]}"; do
+    for topic in "${KAFKA_IOT_TOPICS[@]}"; do
         describe_output=$(docker exec kafka-server /opt/kafka/bin/kafka-topics.sh \
             --bootstrap-server localhost:9092 \
             --describe --topic "$topic" 2>&1) || true
@@ -4008,10 +4015,15 @@ init_kafka_alert_topics() {
         fi
     done
 
-    print_info "告警 Kafka 主题列表:"
+    print_info "IoT Kafka 主题列表:"
     docker exec kafka-server /opt/kafka/bin/kafka-topics.sh \
-        --bootstrap-server localhost:9092 --list 2>/dev/null | grep -E '^iot-(alert|snapshot)' || true
+        --bootstrap-server localhost:9092 --list 2>/dev/null | grep -E '^iot-(alert|snapshot|face-matching|plate-matching)' || true
     return 0
+}
+
+# 兼容旧函数名
+init_kafka_alert_topics() {
+    init_kafka_iot_topics "$@"
 }
 
 
@@ -6014,9 +6026,9 @@ install_middleware() {
     echo ""
     init_minio
 
-    # 初始化/扩容告警 Kafka 主题（64 分区，缓解摄像头告警积压）
+    # 初始化/扩容 IoT Kafka 主题（64 分区：告警、人脸匹配、车牌匹配）
     echo ""
-    init_kafka_alert_topics || print_warning "告警 Kafka 主题初始化未完成，可稍后手动执行: init_kafka_alert_topics"
+    init_kafka_iot_topics || print_warning "IoT Kafka 主题初始化未完成，可稍后手动执行: init_kafka_iot_topics"
 
     
     sleep 5
@@ -6064,7 +6076,7 @@ start_middleware() {
     
     print_success "所有中间件启动完成"
     echo ""
-    init_kafka_alert_topics || print_warning "告警 Kafka 主题初始化未完成"
+    init_kafka_iot_topics || print_warning "IoT Kafka 主题初始化未完成"
     echo ""
     print_section "检查 Milvus 向量数据库"
     wait_for_milvus || print_warning "Milvus 未就绪"
@@ -6149,7 +6161,7 @@ restart_middleware() {
     sleep 15
 
     echo ""
-    init_kafka_alert_topics || print_warning "告警 Kafka 主题初始化未完成"
+    init_kafka_iot_topics || print_warning "IoT Kafka 主题初始化未完成"
     
     # 确保 PostgreSQL 密码正确（确保重启后密码正确）
     echo ""

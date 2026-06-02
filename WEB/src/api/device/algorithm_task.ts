@@ -51,9 +51,14 @@ export interface AlgorithmTask {
   face_detection_enabled?: boolean; // 是否启用人脸检测
   plate_detection_enabled?: boolean; // 是否启用车牌检测
   face_matching_enabled?: boolean; // 是否启用人脸匹配（默认关闭）
-  face_library_id?: number; // 关联人脸库
-  face_library_name?: string;
+  face_library_ids?: number[]; // 关联人脸库（可多选）
+  face_library_names?: string[];
   face_matching_threshold?: number; // 匹配阈值（可选，覆盖人脸库默认）
+  plate_matching_enabled?: boolean; // 是否启用车牌匹配（默认关闭）
+  plate_library_ids?: number[]; // 关联车牌库（可多选）
+  plate_library_names?: string[];
+  /** 匹配业务标签：非空时在所有标签相交的启用库中检索；留空则仅匹配关联库 */
+  matching_business_tags?: string[];
   alert_notification_enabled?: boolean; // 是否启用告警通知
   alert_notification_config?: {
     channels: Array<{
@@ -129,8 +134,11 @@ export const createAlgorithmTask = (data: {
   face_detection_enabled?: boolean;
   plate_detection_enabled?: boolean;
   face_matching_enabled?: boolean;
-  face_library_id?: number;
+  face_library_ids?: number[];
   face_matching_threshold?: number;
+  plate_matching_enabled?: boolean;
+  plate_library_ids?: number[];
+  matching_business_tags?: string[];
   alert_notification_enabled?: boolean;
   alert_notification_config?: {
     channels: Array<{

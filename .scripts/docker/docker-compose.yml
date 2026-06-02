@@ -227,7 +227,7 @@ services:
       - KAFKA_INTER_BROKER_LISTENER_NAME=INTERNAL
       - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
       - KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
-      # 告警主题默认 64 分区，缓解摄像头高频告警单分区积压
+      # 业务主题默认 64 分区（告警 / 人脸匹配 / 车牌匹配；install 脚本会显式创建或扩容）
       - KAFKA_NUM_PARTITIONS=64
       - KAFKA_DEFAULT_REPLICATION_FACTOR=1
       - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1

@@ -157,6 +157,8 @@ def create_app():
     app.config['KAFKA_SNAPSHOT_ALERT_TOPIC'] = os.environ.get('KAFKA_SNAPSHOT_ALERT_TOPIC', 'iot-snapshot-alert')
     app.config['KAFKA_FACE_MATCHING_TOPIC'] = os.environ.get('KAFKA_FACE_MATCHING_TOPIC', 'iot-face-matching')
     app.config['KAFKA_FACE_MATCHING_RESULT_TOPIC'] = os.environ.get('KAFKA_FACE_MATCHING_RESULT_TOPIC', 'iot-face-matching-result')
+    app.config['KAFKA_PLATE_MATCHING_TOPIC'] = os.environ.get('KAFKA_PLATE_MATCHING_TOPIC', 'iot-plate-matching')
+    app.config['KAFKA_PLATE_MATCHING_RESULT_TOPIC'] = os.environ.get('KAFKA_PLATE_MATCHING_RESULT_TOPIC', 'iot-plate-matching-result')
     app.config['KAFKA_REQUEST_TIMEOUT_MS'] = int(os.environ.get('KAFKA_REQUEST_TIMEOUT_MS', '5000'))
     app.config['KAFKA_RETRIES'] = int(os.environ.get('KAFKA_RETRIES', '1'))
     app.config['KAFKA_RETRY_BACKOFF_MS'] = int(os.environ.get('KAFKA_RETRY_BACKOFF_MS', '100'))
@@ -383,6 +385,11 @@ def create_app():
                         ('face_matching_enabled', 'BOOLEAN NOT NULL DEFAULT FALSE'),
                         ('face_library_id', 'INTEGER REFERENCES face_library(id) ON DELETE SET NULL'),
                         ('face_matching_threshold', 'DOUBLE PRECISION'),
+                        ('plate_matching_enabled', 'BOOLEAN NOT NULL DEFAULT FALSE'),
+                        ('plate_library_id', 'INTEGER REFERENCES plate_library(id) ON DELETE SET NULL'),
+                        ('face_library_ids', 'TEXT'),
+                        ('plate_library_ids', 'TEXT'),
+                        ('matching_business_tags', 'TEXT'),
                         ('alert_event_suppress_time', 'INTEGER NOT NULL DEFAULT 5'),
                         ('service_server_ip', 'VARCHAR(45)'),
                         ('service_port', 'INTEGER'),
@@ -478,6 +485,7 @@ def create_app():
                         ('image_url', 'VARCHAR(500)'),
                         ('task_id', 'INTEGER'),
                         ('task_name', 'VARCHAR(255)'),
+                        ('business_tags', 'TEXT'),
                     ]:
                         result = db.session.execute(text(f"""
                             SELECT EXISTS (
@@ -641,6 +649,15 @@ def create_app():
         print(f"✅ Face Blueprint 注册成功")
     except Exception as e:
         print(f"❌ Face Blueprint 注册失败: {str(e)}")
+        import traceback
+        traceback.print_exc()
+
+    try:
+        from app.blueprints import plate
+        app.register_blueprint(plate.plate_bp, url_prefix='/video/plate')
+        print(f"✅ Plate Blueprint 注册成功")
+    except Exception as e:
+        print(f"❌ Plate Blueprint 注册失败: {str(e)}")
         import traceback
         traceback.print_exc()
 
@@ -1001,23 +1018,13 @@ def create_app():
             )
             print('✅ 心跳超时检查任务已启动（每分钟执行一次）')
 
-            # 人脸库自动录入任务（每 5 秒轮询一次）
-            def face_auto_enroll_tick_wrapper():
-                try:
-                    with app.app_context():
-                        from app.services.face_auto_enroll_service import tick_auto_enroll_tasks
-                        tick_auto_enroll_tasks()
-                except Exception as tick_err:
-                    logger.warning(f'人脸自动录入 tick 失败: {tick_err}')
-
-            scheduler.add_job(
-                face_auto_enroll_tick_wrapper,
-                'interval',
-                seconds=5,
-                id='face_auto_enroll_tick',
-                replace_existing=True,
-            )
-            print('✅ 人脸库自动录入任务已启动（每 5 秒执行一次）')
+            # 服务重启后重置遗留的运行中自动录入任务（不自动恢复）
+            from models import FaceAutoEnrollTask, PlateAutoEnrollTask, db
+            face_reset = FaceAutoEnrollTask.query.filter_by(is_running=True).update({'is_running': False})
+            plate_reset = PlateAutoEnrollTask.query.filter_by(is_running=True).update({'is_running': False})
+            if face_reset or plate_reset:
+                db.session.commit()
+                print(f'ℹ️  已重置遗留自动录入任务（人脸 {face_reset}，车牌 {plate_reset}）')
         except Exception as e:
             print(f"❌ 启动心跳超时检查任务失败: {str(e)}")
             import traceback

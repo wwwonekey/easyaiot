@@ -2,6 +2,7 @@
 人脸识别服务（ArcFace ONNX 特征提取 + Milvus 向量检索）
 固定匹配模型：VIDEO/face_rec.onnx；检测复用 VIDEO/face_det.onnx
 """
+import logging
 import os
 import threading
 from types import SimpleNamespace
@@ -12,6 +13,8 @@ import numpy as np
 
 from app.services.face_vector_store import get_face_vector_store
 from app.utils.face_model_paths import FACE_MATCH_MODEL_PATH
+
+logger = logging.getLogger(__name__)
 
 try:
     from insightface.model_zoo import get_model as insightface_get_model
@@ -208,6 +211,48 @@ class FaceRecognitionService:
             "candidates": candidates,
             "threshold": threshold,
         }
+
+    def match_image_file_in_library(
+        self, library_id: int, image: np.ndarray, threshold: float, top_k: int = 5,
+    ) -> Dict[str, Any]:
+        """对已裁剪人脸图或含脸图做 1:N 匹配（异步 Kafka 链路使用）。"""
+        crop_info = self.extract_and_crop_largest_face(image)
+        if crop_info:
+            embedding = crop_info['embedding'].astype(np.float32)
+            bbox = crop_info['bbox']
+        else:
+            try:
+                self._ensure_rec_model()
+                input_size = self._rec_model.input_size
+                resized = cv2.resize(image, input_size)
+                embedding = self._embed_crop(resized)
+                bbox = None
+            except Exception as exc:
+                logger.warning('人脸图特征提取失败: %s', exc)
+                return {
+                    'face_count': 0,
+                    'matched': False,
+                    'best_match': None,
+                    'candidates': [],
+                    'threshold': threshold,
+                }
+
+        candidates = self._vector_store.search_embedding(
+            embedding, top_k=top_k, library_id=library_id,
+        )
+        for item in candidates:
+            item['matched'] = item.get('similarity', 0) >= threshold
+        best = candidates[0] if candidates else None
+        result: Dict[str, Any] = {
+            'face_count': 1,
+            'matched': bool(best and best.get('matched')),
+            'best_match': best,
+            'candidates': candidates,
+            'threshold': threshold,
+        }
+        if bbox:
+            result['bbox'] = bbox
+        return result
 
     def extract_and_crop_largest_face(self, image: np.ndarray) -> Optional[Dict[str, Any]]:
         faces = self._extract_faces(image)

@@ -94,6 +94,31 @@ export const FACE_MANAGE_ROUTE: AppRouteRecordRaw = {
   ],
 }
 
+/** 车牌管理独立页（从车牌库列表跳转） */
+export const PLATE_MANAGE_ROUTE: AppRouteRecordRaw = {
+  path: '/plate-manage',
+  component: LAYOUT,
+  name: 'PlateManageLayout',
+  meta: {
+    title: '车牌管理',
+    hideMenu: true,
+    hideBreadcrumb: true,
+  },
+  children: [
+    {
+      path: ':libraryId',
+      name: 'PlateManage',
+      component: () => import('@/views/plate-manage/index.vue'),
+      meta: {
+        title: '车牌管理',
+        hideMenu: true,
+        canTo: true,
+        activeMenu: 'camera/index',
+      },
+    },
+  ],
+}
+
 export const REDIRECT_ROUTE: AppRouteRecordRaw = {
   path: '/redirect',
   component: LAYOUT,

@@ -38,6 +38,7 @@ import {
   type AlgorithmTask,
 } from '@/api/device/algorithm_task';
 import { listFaceLibraries } from '@/api/device/face_library';
+import { listPlateLibraries } from '@/api/device/plate_library';
 import { getDeviceList, getDeviceInfo, registerDevice, updateDevice } from '@/api/device/camera';
 import { getModelPage } from '@/api/device/model';
 import { notifyTemplateQueryByType } from '@/api/device/notice';
@@ -50,11 +51,18 @@ import {
   getSnapCronHelpLines,
   validateSnapCronMinInterval,
 } from '@/views/camera/utils/cronExpression';
+import {
+  collectMatchingTagsFromLibraries,
+  type LibraryWithTags,
+} from '@/views/camera/utils/libraryMatching';
 
 defineOptions({ name: 'AlgorithmTaskModal' });
 
 const { createMessage } = useMessage();
 const emit = defineEmits(['success', 'register']);
+
+const faceLibraries = ref<LibraryWithTags[]>([]);
+const plateLibraries = ref<LibraryWithTags[]>([]);
 
 const activeTab = ref('basic');
 const taskId = ref<number | null>(null);
@@ -88,6 +96,14 @@ const defaultModels = [
 const modelOptions = ref<Array<{ label: string; value: number }>>([...defaultModels]);
 const modelMap = ref<Map<number, any>>(new Map()); // 存储完整的模型信息
 const faceLibraryOptions = ref<Array<{ label: string; value: number }>>([]);
+const plateLibraryOptions = ref<Array<{ label: string; value: number }>>([]);
+
+function normalizeLibraryIds(ids: unknown): number[] {
+  if (Array.isArray(ids)) {
+    return ids.map((id) => Number(id)).filter((id) => !Number.isNaN(id));
+  }
+  return [];
+}
 
 // 告警通知相关状态
 const notificationChannels = ref<string[]>([]); // 选中的通知渠道
@@ -345,13 +361,31 @@ const loadFaceLibraries = async () => {
   try {
     const res = await listFaceLibraries({ is_enabled: true });
     const rows = Array.isArray(res?.data) ? res.data : (res as any) || [];
-    faceLibraryOptions.value = rows.map((item: any) => ({
-      label: `${item.name} (${item.code})`,
+    faceLibraries.value = rows;
+    faceLibraryOptions.value = rows.map((item: LibraryWithTags) => ({
+      label: item.name,
       value: item.id,
     }));
   } catch (error) {
     console.error('加载人脸库列表失败', error);
+    faceLibraries.value = [];
     faceLibraryOptions.value = [];
+  }
+};
+
+const loadPlateLibraries = async () => {
+  try {
+    const res = await listPlateLibraries({ is_enabled: true });
+    const rows = Array.isArray(res?.data) ? res.data : (res as any) || [];
+    plateLibraries.value = rows;
+    plateLibraryOptions.value = rows.map((item: LibraryWithTags) => ({
+      label: item.name,
+      value: item.id,
+    }));
+  } catch (error) {
+    console.error('加载车牌库列表失败', error);
+    plateLibraries.value = [];
+    plateLibraryOptions.value = [];
   }
 };
 
@@ -622,18 +656,6 @@ const [registerForm, { setFieldsValue, validate, resetFields, updateSchema, getF
         (values.task_type === 'realtime' || values.task_type === 'snap') && !!values.alert_event_enabled,
     },
     {
-      field: 'face_detection_enabled',
-      label: '启用人脸检测',
-      component: 'Switch',
-      defaultValue: true,
-      componentProps: {
-        checkedChildren: '是',
-        unCheckedChildren: '否',
-      },
-      helpMessage: '开启后保留 YOLO 检测到的人脸类别',
-      ifShow: ({ values }) => values.task_type === 'realtime' || values.task_type === 'snap',
-    },
-    {
       field: 'face_matching_enabled',
       label: '启用人脸匹配',
       component: 'Switch',
@@ -642,48 +664,68 @@ const [registerForm, { setFieldsValue, validate, resetFields, updateSchema, getF
         checkedChildren: '是',
         unCheckedChildren: '否',
       },
-      helpMessage: '开启后裁剪检测到的人脸并异步投递 Kafka 进行 1:N 匹配（默认关闭）',
+      helpMessage: '开启后裁剪人脸并异步投递 Kafka 进行 1:N 库匹配',
       ifShow: ({ values }) => values.task_type === 'realtime' || values.task_type === 'snap',
     },
     {
-      field: 'face_library_id',
-      label: '关联人脸库',
+      field: 'face_library_ids',
+      label: '人脸库',
       component: 'Select',
       componentProps: {
-        placeholder: '请选择人脸库',
+        placeholder: '请选择人脸库（可多选）',
         options: faceLibraryOptions,
+        mode: 'multiple',
         showSearch: true,
         allowClear: true,
         filterOption: (input: string, option: any) =>
           (option?.label || '').toLowerCase().includes(input.toLowerCase()),
       },
-      ifShow: ({ values }) =>
-        (values.task_type === 'realtime' || values.task_type === 'snap') && !!values.face_matching_enabled,
-    },
-    {
-      field: 'face_matching_threshold',
-      label: '匹配阈值',
-      component: 'InputNumber',
-      componentProps: {
-        placeholder: '留空则使用人脸库默认阈值',
-        min: 0,
-        max: 1,
-        step: 0.01,
-        style: { width: '100%' },
+      dynamicRules: ({ values }) => {
+        if (!values.face_matching_enabled) return [];
+        const ids = normalizeLibraryIds(values.face_library_ids);
+        if (!ids.length) {
+          return [{ required: true, message: '启用人脸匹配时必须选择至少一个人脸库' }];
+        }
+        return [];
       },
       ifShow: ({ values }) =>
         (values.task_type === 'realtime' || values.task_type === 'snap') && !!values.face_matching_enabled,
     },
     {
-      field: 'plate_detection_enabled',
-      label: '启用车牌检测',
+      field: 'plate_matching_enabled',
+      label: '启用车牌匹配',
       component: 'Switch',
-      defaultValue: true,
+      defaultValue: false,
       componentProps: {
         checkedChildren: '是',
         unCheckedChildren: '否',
       },
+      helpMessage: '开启后独立队列识别车牌并异步投递 Kafka 进行库匹配（默认关闭）',
       ifShow: ({ values }) => values.task_type === 'realtime' || values.task_type === 'snap',
+    },
+    {
+      field: 'plate_library_ids',
+      label: '车牌库',
+      component: 'Select',
+      componentProps: {
+        placeholder: '请选择车牌库（可多选）',
+        options: plateLibraryOptions,
+        mode: 'multiple',
+        showSearch: true,
+        allowClear: true,
+        filterOption: (input: string, option: any) =>
+          (option?.label || '').toLowerCase().includes(input.toLowerCase()),
+      },
+      dynamicRules: ({ values }) => {
+        if (!values.plate_matching_enabled) return [];
+        const ids = normalizeLibraryIds(values.plate_library_ids);
+        if (!ids.length) {
+          return [{ required: true, message: '启用车牌匹配时必须选择至少一个车牌库' }];
+        }
+        return [];
+      },
+      ifShow: ({ values }) =>
+        (values.task_type === 'realtime' || values.task_type === 'snap') && !!values.plate_matching_enabled,
     },
     {
       field: 'alert_notification_enabled',
@@ -871,7 +913,7 @@ const [register, { setDrawerProps, closeDrawer }] = useDrawerInner(async (data) 
   initDefaultModels();
 
   // 加载选项数据
-  await Promise.all([loadDevices(), loadModels(), loadFaceLibraries()]);
+  await Promise.all([loadDevices(), loadModels(), loadFaceLibraries(), loadPlateLibraries()]);
 
   if (modalData.value.record) {
     const record = modalData.value.record;
@@ -982,11 +1024,10 @@ const [register, { setDrawerProps, closeDrawer }] = useDrawerInner(async (data) 
       tracking_smooth_alpha: record.tracking_smooth_alpha || 0.25,
       alert_event_enabled: record.alert_event_enabled !== undefined ? record.alert_event_enabled : false,
       alert_event_suppress_time: record.alert_event_suppress_time ?? 5,
-      face_detection_enabled: record.face_detection_enabled !== undefined ? record.face_detection_enabled : true,
       face_matching_enabled: record.face_matching_enabled === true,
-      face_library_id: record.face_library_id,
-      face_matching_threshold: record.face_matching_threshold,
-      plate_detection_enabled: record.plate_detection_enabled !== undefined ? record.plate_detection_enabled : true,
+      face_library_ids: normalizeLibraryIds(record.face_library_ids),
+      plate_matching_enabled: record.plate_matching_enabled === true,
+      plate_library_ids: normalizeLibraryIds(record.plate_library_ids),
       alarm_suppress_time: record.alarm_suppress_time ?? 300,
       alert_notification_enabled: record.alert_notification_enabled !== undefined ? record.alert_notification_enabled : false,
       notification_channels: notificationChannels.value,
@@ -1081,9 +1122,8 @@ const [register, { setDrawerProps, closeDrawer }] = useDrawerInner(async (data) 
       tracking_smooth_alpha: 0.25,
       alert_event_enabled: false, // 默认关闭告警事件
       alert_event_suppress_time: 5,
-      face_detection_enabled: true,
       face_matching_enabled: false,
-      plate_detection_enabled: true,
+      plate_matching_enabled: false,
       alarm_suppress_time: 300,
       notification_channels: [],
       is_full_day_defense: true, // 默认全天布防
@@ -1151,6 +1191,10 @@ const handleFieldValueChange = async (key: string, value: any) => {
       notificationChannels.value = [];
       channelTemplates.value = {};
     }
+  } else if (key === 'face_matching_enabled' && !value) {
+    await setFieldsValue({ face_library_ids: [] });
+  } else if (key === 'plate_matching_enabled' && !value) {
+    await setFieldsValue({ plate_library_ids: [] });
   } else if (key === 'task_type' && value === 'snap') {
     const currentValues = await getFieldsValue();
     if (!currentValues.cron_expression?.trim()) {
@@ -1256,18 +1300,43 @@ const handleSubmit = async () => {
     }
 
 
-    // 人脸匹配校验
-    if (values.face_matching_enabled && !values.face_library_id) {
-      createMessage.error('启用人脸匹配时必须选择人脸库');
+    // 人脸/车牌匹配：检测开关与匹配一致；业务标签从所选库透传
+    values.face_detection_enabled = !!values.face_matching_enabled;
+    values.plate_detection_enabled = !!values.plate_matching_enabled;
+
+    values.face_library_ids = normalizeLibraryIds(values.face_library_ids);
+    values.plate_library_ids = normalizeLibraryIds(values.plate_library_ids);
+
+    if (values.face_matching_enabled && !values.face_library_ids.length) {
+      createMessage.error('启用人脸匹配时必须选择至少一个人脸库');
       confirmLoading.value = false;
       setDrawerProps({ confirmLoading: false });
       return;
     }
     if (!values.face_matching_enabled) {
-      values.face_library_id = null;
-      values.face_matching_threshold = null;
+      values.face_library_ids = [];
+    }
+    values.face_matching_threshold = null;
+    if (values.plate_matching_enabled && !values.plate_library_ids.length) {
+      createMessage.error('启用车牌匹配时必须选择至少一个车牌库');
+      confirmLoading.value = false;
+      setDrawerProps({ confirmLoading: false });
+      return;
+    }
+    if (!values.plate_matching_enabled) {
+      values.plate_library_ids = [];
     }
 
+    const propagatedTags = collectMatchingTagsFromLibraries(
+      faceLibraries.value,
+      plateLibraries.value,
+      values.face_library_ids,
+      values.plate_library_ids,
+    );
+    values.matching_business_tags = propagatedTags.length ? propagatedTags : undefined;
+    if (!values.face_matching_enabled && !values.plate_matching_enabled) {
+      values.matching_business_tags = undefined;
+    }
     // 确保 model_ids 是数组格式
     if (values.model_ids && !Array.isArray(values.model_ids)) {
       values.model_ids = [values.model_ids];
@@ -1358,9 +1427,8 @@ const handleReset = () => {
       tracking_smooth_alpha: 0.25,
       alert_event_enabled: false, // 默认关闭告警事件
       alert_event_suppress_time: 5,
-      face_detection_enabled: true,
       face_matching_enabled: false,
-      plate_detection_enabled: true,
+      plate_matching_enabled: false,
       alarm_suppress_time: 300,
       is_full_day_defense: true, // 默认全天布防
     });

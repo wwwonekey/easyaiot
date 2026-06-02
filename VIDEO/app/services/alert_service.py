@@ -119,6 +119,16 @@ def _alert_to_dict(alert: Alert) -> dict:
     image_url = alert.image_url if hasattr(alert, 'image_url') else ''
     result['image_url'] = image_url or ''
 
+    business_tags = []
+    if hasattr(alert, 'business_tags') and alert.business_tags:
+        try:
+            parsed = json.loads(alert.business_tags) if isinstance(alert.business_tags, str) else alert.business_tags
+            if isinstance(parsed, list):
+                business_tags = parsed
+        except (json.JSONDecodeError, TypeError):
+            business_tags = []
+    result['business_tags'] = business_tags
+
     return result
 
 
@@ -162,6 +172,22 @@ def _get_alert_filter_query(args: dict) -> Query:
         task_name_value = args['task_name'].strip() if isinstance(args['task_name'], str) else args['task_name']
         if task_name_value:
             query = query.filter(Alert.object.like(f'%{task_name_value}%'))
+
+    if 'business_tags' in args and args['business_tags']:
+        tag_value = args['business_tags']
+        tag_list = []
+        if isinstance(tag_value, str):
+            tag_value = tag_value.strip()
+            if tag_value:
+                try:
+                    parsed = json.loads(tag_value)
+                    tag_list = parsed if isinstance(parsed, list) else [tag_value]
+                except json.JSONDecodeError:
+                    tag_list = [t.strip() for t in tag_value.split(',') if t.strip()]
+        elif isinstance(tag_value, list):
+            tag_list = [str(t).strip() for t in tag_value if str(t).strip()]
+        for tag in tag_list:
+            query = query.filter(Alert.business_tags.ilike(f'%{tag}%'))
 
     if 'begin_datetime' in args and args['begin_datetime']:
         begin_datetime_value = args['begin_datetime'].strip() if isinstance(args['begin_datetime'], str) else str(
@@ -380,6 +406,18 @@ def create_alert(alert_data: dict) -> dict:
         else:
             channels = None
 
+        business_tags = alert_data.get('business_tags')
+        if business_tags is not None:
+            if isinstance(business_tags, list):
+                business_tags = json.dumps(business_tags, ensure_ascii=False)
+            elif isinstance(business_tags, str):
+                try:
+                    json.loads(business_tags)
+                except (json.JSONDecodeError, TypeError):
+                    business_tags = json.dumps([business_tags], ensure_ascii=False)
+        else:
+            business_tags = None
+
         task_id = alert_data.get('task_id')
         task_name = alert_data.get('task_name')
 
@@ -404,7 +442,8 @@ def create_alert(alert_data: dict) -> dict:
             task_id=task_id,
             task_name=task_name,
             notify_users=notify_users,
-            channels=channels
+            channels=channels,
+            business_tags=business_tags,
         )
         
         db.session.add(alert)

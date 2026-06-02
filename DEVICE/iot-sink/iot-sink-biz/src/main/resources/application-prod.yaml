@@ -107,6 +107,14 @@ spring:
         ack-mode: manual_immediate
         missing-topics-fatal: false
         poll-timeout: 600000
+    face-matching:
+      topic: iot-face-matching
+      group-id: iot-sink-face-matching-consumer
+      result-topic: iot-face-matching-result
+    plate-matching:
+      topic: iot-plate-matching
+      group-id: iot-sink-plate-matching-consumer
+      result-topic: iot-plate-matching-result
 
 --- #################### 定时任务相关配置 ####################
 

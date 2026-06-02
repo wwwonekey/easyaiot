@@ -799,19 +799,5 @@ def list_match_records(
 
 
 def process_face_matching_message(payload: Dict[str, Any]) -> FaceMatchRecord:
-    record = FaceMatchRecord(
-        task_id=payload.get('taskId') or payload.get('task_id'),
-        task_name=payload.get('taskName') or payload.get('task_name'),
-        device_id=str(payload.get('deviceId') or payload.get('device_id') or ''),
-        device_name=payload.get('deviceName') or payload.get('device_name'),
-        library_id=payload.get('libraryId') or payload.get('library_id'),
-        library_name=payload.get('libraryName') or payload.get('library_name'),
-        face_image_path=payload.get('faceImagePath') or payload.get('face_image_path'),
-        threshold=payload.get('threshold'),
-        alert_id=payload.get('alertId') or payload.get('alert_id'),
-        task_type=payload.get('taskType') or payload.get('task_type'),
-        status='success',
-    )
-    db.session.add(record)
-    db.session.commit()
-    return record
+    from app.services.library_matching_service import process_face_matching_message as _process
+    return _process(payload)

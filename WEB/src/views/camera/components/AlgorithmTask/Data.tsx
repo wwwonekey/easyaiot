@@ -1,6 +1,7 @@
 // 算法任务表格列定义
 import { BasicColumn, FormProps } from "@/components/Table";
 import { Tag } from "ant-design-vue";
+import { summarizeMatchingForList } from "@/views/camera/utils/libraryMatching";
 
 export function getBasicColumns(): BasicColumn[] {
   return [
@@ -88,6 +89,20 @@ export function getBasicColumns(): BasicColumn[] {
           return record.algorithm_services.map((s: any) => s.service_name).join(', ');
         }
         return '--';
+      },
+    },
+    {
+      title: '库匹配',
+      dataIndex: 'matching_business_tags',
+      width: 180,
+      customRender: ({ record }) => {
+        const summary = summarizeMatchingForList(record);
+        if (!summary) {
+          return '--';
+        }
+        return (
+          <Tag color={summary.mode === 'tags' ? 'green' : 'blue'}>{summary.text}</Tag>
+        );
       },
     },
     {

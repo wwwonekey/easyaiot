@@ -25,6 +25,51 @@ ALARM_SUPPRESS_MAX = 86400
 _USERLESS_NOTIFY_METHODS = frozenset({'http', 'webhook'})
 
 
+def _serialize_matching_business_tags(tags) -> Optional[str]:
+    from app.services.library_matching_service import parse_business_tags
+    parsed = parse_business_tags(tags)
+    return json.dumps(parsed, ensure_ascii=False) if parsed else None
+
+
+def _normalize_library_ids(ids) -> List[int]:
+    if ids is None:
+        return []
+    if isinstance(ids, int):
+        return [ids]
+    if isinstance(ids, str):
+        text = ids.strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return [int(x) for x in parsed if x is not None and str(x).strip() != '']
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+        try:
+            return [int(text)]
+        except (TypeError, ValueError):
+            return []
+    if isinstance(ids, list):
+        result = []
+        for item in ids:
+            try:
+                result.append(int(item))
+            except (TypeError, ValueError):
+                continue
+        return result
+    return []
+
+
+def _serialize_library_ids(ids) -> Optional[str]:
+    parsed = _normalize_library_ids(ids)
+    return json.dumps(parsed, ensure_ascii=False) if parsed else None
+
+
+def _has_library_matching_scope(library_ids) -> bool:
+    return bool(_normalize_library_ids(library_ids))
+
+
 def _has_userless_channel(channels: List[Dict]) -> bool:
     return any((ch.get('method') or '').lower() in _USERLESS_NOTIFY_METHODS for ch in (channels or []))
 
@@ -357,10 +402,13 @@ def create_algorithm_task(task_name: str,
                          alert_event_enabled: bool = False,
                          alert_event_suppress_time: int = 5,
                          face_detection_enabled: bool = True,
-                         plate_detection_enabled: bool = True,
+                         plate_detection_enabled: bool = False,
                          face_matching_enabled: bool = False,
-                         face_library_id: Optional[int] = None,
+                         face_library_ids=None,
                          face_matching_threshold: Optional[float] = None,
+                         plate_matching_enabled: bool = False,
+                         plate_library_ids=None,
+                         matching_business_tags=None,
                          alert_notification_enabled: bool = False,
                          alert_notification_config: Optional[str] = None,
                          alarm_suppress_time: int = 300,
@@ -465,11 +513,22 @@ def create_algorithm_task(task_name: str,
             cron_expression = None
             frame_skip = 25
 
+        face_lib_ids = _normalize_library_ids(face_library_ids)
+        plate_lib_ids = _normalize_library_ids(plate_library_ids)
+
         if face_matching_enabled:
-            if not face_library_id:
-                raise ValueError('启用人脸匹配时必须指定人脸库')
+            if not _has_library_matching_scope(face_lib_ids):
+                raise ValueError('启用人脸匹配时必须指定至少一个人脸库')
             from models import FaceLibrary
-            FaceLibrary.query.get_or_404(face_library_id)
+            for lib_id in face_lib_ids:
+                FaceLibrary.query.get_or_404(lib_id)
+
+        if plate_matching_enabled:
+            if not _has_library_matching_scope(plate_lib_ids):
+                raise ValueError('启用车牌匹配时必须指定至少一个车牌库')
+            from models import PlateLibrary
+            for lib_id in plate_lib_ids:
+                PlateLibrary.query.get_or_404(lib_id)
         
         # 生成唯一编号
         prefix = "REALTIME_TASK" if task_type == 'realtime' else "SNAP_TASK"
@@ -584,8 +643,11 @@ def create_algorithm_task(task_name: str,
             face_detection_enabled=face_detection_enabled,
             plate_detection_enabled=plate_detection_enabled,
             face_matching_enabled=face_matching_enabled,
-            face_library_id=face_library_id,
+            face_library_ids=_serialize_library_ids(face_lib_ids),
             face_matching_threshold=face_matching_threshold,
+            plate_matching_enabled=plate_matching_enabled,
+            plate_library_ids=_serialize_library_ids(plate_lib_ids),
+            matching_business_tags=_serialize_matching_business_tags(matching_business_tags),
             alert_notification_enabled=alert_notification_enabled,
             alert_notification_config=alert_notification_config,
             alarm_suppress_time=alarm_suppress_time,
@@ -741,7 +803,9 @@ def update_algorithm_task(task_id: int, **kwargs) -> AlgorithmTask:
             'tracking_enabled', 'tracking_similarity_threshold', 'tracking_max_age', 'tracking_smooth_alpha',  # 追踪配置
             'alert_event_enabled', 'alert_event_suppress_time',
             'face_detection_enabled', 'plate_detection_enabled',
-            'face_matching_enabled', 'face_library_id', 'face_matching_threshold',
+            'face_matching_enabled', 'face_library_ids', 'face_matching_threshold',
+            'plate_matching_enabled', 'plate_library_ids',
+            'matching_business_tags',
             'alert_notification_enabled', 'alert_notification_config',
             'alarm_suppress_time',  # 告警配置
             'cron_expression', 'frame_skip',  # 抓拍算法任务配置
@@ -761,15 +825,43 @@ def update_algorithm_task(task_id: int, **kwargs) -> AlgorithmTask:
         )
         kwargs.update(interval_kwargs)
 
-        if kwargs.get('face_matching_enabled'):
-            lib_id = kwargs.get('face_library_id')
-            if not lib_id:
-                raise ValueError('启用人脸匹配时必须指定人脸库')
+        if 'face_library_ids' in kwargs:
+            face_lib_ids = _normalize_library_ids(kwargs.get('face_library_ids'))
+            kwargs['face_library_ids'] = _serialize_library_ids(face_lib_ids)
+
+        if 'plate_library_ids' in kwargs:
+            plate_lib_ids = _normalize_library_ids(kwargs.get('plate_library_ids'))
+            kwargs['plate_library_ids'] = _serialize_library_ids(plate_lib_ids)
+
+        if kwargs.get('face_matching_enabled') or (
+            'face_matching_enabled' not in kwargs and task.face_matching_enabled
+        ):
+            lib_ids_raw = kwargs.get('face_library_ids') if 'face_library_ids' in kwargs else task.face_library_ids
+            face_lib_ids = _normalize_library_ids(lib_ids_raw)
+            if not _has_library_matching_scope(face_lib_ids):
+                raise ValueError('启用人脸匹配时必须指定至少一个人脸库')
             from models import FaceLibrary
-            FaceLibrary.query.get_or_404(lib_id)
+            for lid in face_lib_ids:
+                FaceLibrary.query.get_or_404(lid)
         elif 'face_matching_enabled' in kwargs and not kwargs.get('face_matching_enabled'):
-            kwargs['face_library_id'] = None
+            kwargs['face_library_ids'] = None
             kwargs['face_matching_threshold'] = None
+
+        if kwargs.get('plate_matching_enabled') or (
+            'plate_matching_enabled' not in kwargs and task.plate_matching_enabled
+        ):
+            lib_ids_raw = kwargs.get('plate_library_ids') if 'plate_library_ids' in kwargs else task.plate_library_ids
+            plate_lib_ids = _normalize_library_ids(lib_ids_raw)
+            if not _has_library_matching_scope(plate_lib_ids):
+                raise ValueError('启用车牌匹配时必须指定至少一个车牌库')
+            from models import PlateLibrary
+            for lid in plate_lib_ids:
+                PlateLibrary.query.get_or_404(lid)
+        elif 'plate_matching_enabled' in kwargs and not kwargs.get('plate_matching_enabled'):
+            kwargs['plate_library_ids'] = None
+
+        if 'matching_business_tags' in kwargs:
+            kwargs['matching_business_tags'] = _serialize_matching_business_tags(kwargs['matching_business_tags'])
         
         # 处理告警通知配置（如果是字典或字符串，需要转换为JSON字符串）
         # 在保存前，从消息模板中提取通知人信息并保存到配置中

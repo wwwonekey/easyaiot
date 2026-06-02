@@ -208,6 +208,14 @@ const [
       p.task_name = String(p.task_name).trim();
       if (!p.task_name) delete p.task_name;
     }
+    if (Array.isArray(p.business_tags)) {
+      const tags = p.business_tags.map((t) => String(t).trim()).filter(Boolean);
+      if (tags.length) {
+        p.business_tags = tags.join(',');
+      } else {
+        delete p.business_tags;
+      }
+    }
     const route = router.currentRoute.value;
     if (route.query.task_name && !p.task_name) {
       p.task_name = String(route.query.task_name).trim();
@@ -224,7 +232,8 @@ const [
       p.task_name ||
       p.device_id ||
       p.object ||
-      p.event
+      p.event ||
+      (p.business_tags && (Array.isArray(p.business_tags) ? p.business_tags.length : String(p.business_tags).trim()))
     );
     if (!hasFilterParams && Object.keys(lastTableFilterParams.value).length > 0) {
       Object.assign(p, lastTableFilterParams.value);
@@ -236,6 +245,9 @@ const [
       if (p.device_id !== undefined && p.device_id !== '') filterParams.device_id = p.device_id;
       if (p.object !== undefined && p.object !== null && p.object !== '') filterParams.object = p.object;
       if (p.event !== undefined && p.event !== null && p.event !== '') filterParams.event = p.event;
+      if (p.business_tags && Array.isArray(p.business_tags) && p.business_tags.length) {
+        filterParams.business_tags = p.business_tags;
+      }
       lastTableFilterParams.value = filterParams;
     }
     return p;

@@ -1,5 +1,7 @@
 import {BasicColumn, FormProps} from "@/components/Table";
+import { Tag } from "ant-design-vue";
 import {queryAlertCameras} from "@/api/device/calculate";
+import { ALERT_EVENT_OPTIONS, formatAlertEvent, getAlertEventTagColor } from "@/views/alert/alertDisplay";
 
 /** 告警列表摄像头筛选：与算法任务里摄像头下拉一致的模糊匹配（按名称） */
 export const alertCameraSelectProps = {
@@ -44,6 +46,9 @@ export function getBasicColumns(): BasicColumn[] {
       title: '告警事件',
       dataIndex: 'event',
       width: 120,
+      customRender: ({ text }) => (
+        <Tag color={getAlertEventTagColor(text)}>{formatAlertEvent(text)}</Tag>
+      ),
     },
     {
       title: '任务类型',
@@ -67,6 +72,25 @@ export function getBasicColumns(): BasicColumn[] {
       title: '告警对象',
       dataIndex: 'object',
       width: 120,
+    },
+    {
+      title: '业务标签',
+      dataIndex: 'business_tags',
+      width: 160,
+      customRender: ({ text }) => {
+        if (!text || !Array.isArray(text) || text.length === 0) {
+          return '-';
+        }
+        return (
+          <span>
+            {text.map((tag: string) => (
+              <Tag key={tag} color="blue" style={{ marginRight: '4px', marginBottom: '4px' }}>
+                {tag}
+              </Tag>
+            ))}
+          </span>
+        );
+      },
     },
     {
       title: '检测区域',
@@ -205,10 +229,20 @@ export function getFormConfig(): Partial<FormProps> {
         label: `告警事件`,
         component: 'Select',
         componentProps: {
-          options: [
-            {value: null, label: '全部'},
-            {value: "行人检测", label: "行人检测"},
-          ]
+          options: [...ALERT_EVENT_OPTIONS],
+        },
+        colProps: {span: 8},
+      },
+      {
+        field: 'business_tags',
+        label: '业务标签',
+        component: 'Select',
+        helpMessage: '筛选告警携带的业务标签（库匹配命中后会写入）',
+        componentProps: {
+          mode: 'tags',
+          placeholder: '输入标签后回车，支持多个',
+          tokenSeparators: [','],
+          open: false,
         },
         colProps: {span: 8},
       },
