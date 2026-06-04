@@ -72,6 +72,7 @@ class Device(db.Model):
     address = db.Column(db.String(500), nullable=True, comment='安装地址或位置描述')
     location_source = db.Column(db.String(20), nullable=True, comment='位置来源: manual/gb28181/import')
     location_updated_at = db.Column(db.DateTime, nullable=True, comment='位置信息最后更新时间')
+    heading = db.Column(db.Float, nullable=True, comment='安装朝向(度)，0=正北，顺时针')
     images = db.relationship('Image', backref='project', lazy=True, cascade='all, delete-orphan')
     created_at = db.Column(db.DateTime, default=lambda: datetime.utcnow())
     updated_at = db.Column(db.DateTime, default=lambda: datetime.utcnow(), onupdate=lambda: datetime.utcnow())

@@ -26,12 +26,12 @@ from app.services.nvr_service import (
 )
 from app.services.onvif_service import OnvifCamera
 from app.utils.ip_utils import IpReachabilityMonitor, resolve_ipv4_for_stream_urls
-from models import Device, db, DeviceDetectionRegion, DeviceDirectory
+from models import Device, db, DeviceDetectionRegion, DeviceDirectory, DeviceTrackSession, DeviceTrackPoint
 
 DEFAULT_DIRECTORY_NAME = '默认分组'
 
 _LOCATION_FIELD_KEYS = frozenset({
-    'longitude', 'latitude', 'altitude', 'address', 'location_source',
+    'longitude', 'latitude', 'altitude', 'address', 'location_source', 'heading',
 })
 
 
@@ -57,6 +57,14 @@ def _validate_location_pair(longitude, latitude):
         raise ValueError('纬度范围应在 -90 至 90 之间')
 
 
+def _validate_heading(heading):
+    """朝向角：0=正北，顺时针 0-360。"""
+    if heading is None:
+        return
+    if not (0.0 <= heading <= 360.0):
+        raise ValueError('朝向应在 0 至 360 度之间')
+
+
 def _location_fields_for_device(camera: Device) -> dict:
     has_location = camera.longitude is not None and camera.latitude is not None
     updated_at = camera.location_updated_at
@@ -65,6 +73,7 @@ def _location_fields_for_device(camera: Device) -> dict:
         'latitude': camera.latitude,
         'altitude': camera.altitude,
         'address': camera.address,
+        'heading': camera.heading,
         'location_source': camera.location_source,
         'location_updated_at': updated_at.isoformat() if updated_at else None,
         'has_location': has_location,
@@ -80,6 +89,7 @@ def _apply_location_updates(camera: Device, update_info: dict) -> None:
     latitude = camera.latitude
     altitude = camera.altitude
     address = camera.address
+    heading = camera.heading
 
     if 'longitude' in update_info:
         longitude = _parse_optional_float(update_info['longitude'])
@@ -87,6 +97,8 @@ def _apply_location_updates(camera: Device, update_info: dict) -> None:
         latitude = _parse_optional_float(update_info['latitude'])
     if 'altitude' in update_info:
         altitude = _parse_optional_float(update_info['altitude'])
+    if 'heading' in update_info:
+        heading = _parse_optional_float(update_info['heading'])
     if 'address' in update_info:
         raw_addr = update_info['address']
         if raw_addr is None or raw_addr == '':
@@ -95,6 +107,7 @@ def _apply_location_updates(camera: Device, update_info: dict) -> None:
             address = str(raw_addr).strip() or None
 
     _validate_location_pair(longitude, latitude)
+    _validate_heading(heading)
     if altitude is not None and not (-500.0 <= altitude <= 9000.0):
         raise ValueError('海拔高度应在 -500 至 9000 米之间')
 
@@ -102,9 +115,10 @@ def _apply_location_updates(camera: Device, update_info: dict) -> None:
     camera.latitude = latitude
     camera.altitude = altitude
     camera.address = address
+    camera.heading = heading
 
     has_coords = longitude is not None and latitude is not None
-    has_any = has_coords or altitude is not None or bool(address)
+    has_any = has_coords or altitude is not None or bool(address) or heading is not None
     if has_any:
         src = update_info.get('location_source')
         if src:
@@ -115,6 +129,7 @@ def _apply_location_updates(camera: Device, update_info: dict) -> None:
     else:
         camera.location_source = None
         camera.location_updated_at = None
+        camera.heading = None
 
 # 全局变量定义
 _onvif_cameras = {}
@@ -260,6 +275,17 @@ def _create_onvif_camera(camera_id, *args, **kwargs) -> OnvifCamera:
 def _get_camera(id: str) -> Device:
     """获取单个设备ORM对象"""
     return Device.query.get(id)
+
+
+def _get_camera_for_location(id: str, *, name: str | None = None) -> Device:
+    """获取设备；国标虚拟通道在不存在时按需入库，供坐标设置/详情查询。"""
+    camera = Device.query.get(id)
+    if camera:
+        return camera
+    if (id or '').startswith('gb28181_'):
+        from app.services.gb28181_sync_service import ensure_gb28181_virtual_device
+        return ensure_gb28181_virtual_device(id, name=name)
+    raise ValueError(f'设备 {id} 不存在，请先注册')
 
 
 def _get_cameras() -> list[Device]:
@@ -1149,15 +1175,25 @@ def ensure_device_spaces(device_id: str):
         logger.warning(f'检查设备 {device_id} 空间失败: {str(e)}')
 
 
-def get_camera_info(id: str) -> dict:
+def get_device_location_info(device_id: str, *, ensure_name: str | None = None) -> dict:
+    """获取设备坐标信息；国标虚拟通道不存在时按需入库。"""
+    camera = _get_camera_for_location(device_id, name=ensure_name)
+    payload = _to_dict(camera)
+    return {
+        'id': camera.id,
+        'name': camera.name,
+        'device_kind': payload.get('device_kind'),
+        **_location_fields_for_device(camera),
+    }
+
+
+def get_camera_info(id: str, *, ensure_name: str | None = None) -> dict:
     """获取设备基本信息"""
-    camera = _get_camera(id)
-    if not camera:
-        raise ValueError(f'设备 {id} 不存在，请先注册')
-    
+    camera = _get_camera_for_location(id, name=ensure_name)
+
     # 确保设备有对应的抓拍空间和录像空间
     ensure_device_spaces(id)
-    
+
     return _to_dict(camera)
 
 
@@ -1527,3 +1563,104 @@ def list_devices_for_map(*, directory_id=None, has_location_only=True) -> list:
             **nvr_fields_for_device(device),
         })
     return result
+
+
+def update_device_location(device_id: str, update_info: dict, *, ensure_name: str | None = None) -> dict:
+    """更新单个摄像头的位置信息（地图选点等场景）。"""
+    camera = _get_camera_for_location(device_id, name=ensure_name)
+    _apply_location_updates(camera, update_info)
+    db.session.commit()
+    return _location_fields_for_device(camera)
+
+
+def batch_update_device_locations(items: list) -> dict:
+    """批量更新摄像头 WGS84 坐标（CSV/Excel 导入场景）。"""
+    if not items:
+        return {'updated': 0, 'errors': []}
+
+    updated = 0
+    errors = []
+    for item in items:
+        if not isinstance(item, dict):
+            errors.append({'index': None, 'msg': '条目格式无效'})
+            continue
+        device_id = str(item.get('device_id') or item.get('id') or '').strip()
+        if not device_id:
+            errors.append({'device_id': None, 'msg': '缺少 device_id'})
+            continue
+        try:
+            camera = _get_camera_for_location(
+                device_id,
+                name=str(item.get('name') or '').strip() or None,
+            )
+        except ValueError:
+            errors.append({'device_id': device_id, 'msg': '设备不存在'})
+            continue
+        try:
+            _apply_location_updates(camera, {
+                'longitude': item.get('longitude'),
+                'latitude': item.get('latitude'),
+                'altitude': item.get('altitude'),
+                'address': item.get('address'),
+                'heading': item.get('heading'),
+                'location_source': item.get('location_source') or 'import',
+            })
+            updated += 1
+        except ValueError as exc:
+            errors.append({'device_id': device_id, 'msg': str(exc)})
+
+    if updated:
+        db.session.commit()
+    else:
+        db.session.rollback()
+    return {'updated': updated, 'errors': errors, 'total': len(items)}
+
+
+def _parse_optional_datetime(value):
+    if value is None or value == '':
+        return None
+    if isinstance(value, datetime):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d'):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    raise ValueError(f'无法解析时间: {text}')
+
+
+def list_track_sessions(*, device_id=None, begin=None, end=None, limit=50) -> list:
+    """查询轨迹段列表，供地图轨迹回放选择。"""
+    query = DeviceTrackSession.query
+    if device_id:
+        query = query.filter(DeviceTrackSession.device_id == str(device_id).strip())
+    begin_dt = _parse_optional_datetime(begin) if begin else None
+    end_dt = _parse_optional_datetime(end) if end else None
+    if begin_dt:
+        query = query.filter(DeviceTrackSession.started_at >= begin_dt)
+    if end_dt:
+        query = query.filter(DeviceTrackSession.started_at <= end_dt)
+    sessions = query.order_by(DeviceTrackSession.started_at.desc()).limit(max(1, min(int(limit or 50), 200))).all()
+    return [session.to_dict() for session in sessions]
+
+
+def list_track_points(*, session_id=None, device_id=None, begin=None, end=None, limit=5000) -> list:
+    """查询轨迹点；优先 session_id，否则按 device_id + 时间范围。"""
+    query = DeviceTrackPoint.query
+    if session_id not in (None, ''):
+        query = query.filter(DeviceTrackPoint.session_id == int(session_id))
+    elif device_id:
+        query = query.filter(DeviceTrackPoint.device_id == str(device_id).strip())
+    else:
+        raise ValueError('需提供 session_id 或 device_id')
+    begin_dt = _parse_optional_datetime(begin) if begin else None
+    end_dt = _parse_optional_datetime(end) if end else None
+    if begin_dt:
+        query = query.filter(DeviceTrackPoint.recorded_at >= begin_dt)
+    if end_dt:
+        query = query.filter(DeviceTrackPoint.recorded_at <= end_dt)
+    points = query.order_by(DeviceTrackPoint.recorded_at.asc()).limit(max(1, min(int(limit or 5000), 10000))).all()
+    return [point.to_dict() for point in points]

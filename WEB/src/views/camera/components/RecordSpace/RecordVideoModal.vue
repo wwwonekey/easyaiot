@@ -56,7 +56,7 @@
                   <div class="img-box">
                     <img
                       v-if="item.thumbnail_url"
-                      :src="item.thumbnail_url"
+                      :src="resolveAlertImageDisplayUrl(item.thumbnail_url)"
                       :alt="item.filename"
                       class="card-image"
                     />
@@ -123,6 +123,7 @@ import { BasicModal, useModalInner, useModal } from '@/components/Modal';
 import { useMessage } from '@/hooks/web/useMessage';
 import { getRecordVideoList, deleteRecordVideos, type RecordVideo } from '@/api/device/record';
 import DialogPlayer from '@/components/VideoPlayer/DialogPlayer.vue';
+import { resolveAlertImageDisplayUrl } from '@/utils/alertMinioImage';
 
 defineOptions({ name: 'RecordVideoModal' });
 
@@ -177,16 +178,7 @@ function pageSizeChange(_current: number, size: number) {
 const getVideoUrl = (record: RecordVideo) => {
   // 优先使用后台返回的 url 字段，如果没有则使用 object_name 构建
   if (record.url) {
-    // 如果是完整URL（以http://或https://开头），直接返回
-    if (record.url.startsWith('http://') || record.url.startsWith('https://')) {
-      return record.url;
-    }
-    // 如果是相对路径（以/api/v1/buckets开头），添加前端启动地址前缀
-    if (record.url.startsWith('/api/v1/buckets')) {
-      return `${window.location.origin}${record.url}`;
-    }
-    // 其他情况直接返回
-    return record.url;
+    return resolveAlertImageDisplayUrl(record.url);
   }
   if (!modalData.value.space_id) return '';
   return `/video/record/space/${modalData.value.space_id}/video/${record.object_name}`;

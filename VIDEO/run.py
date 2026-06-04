@@ -303,6 +303,7 @@ def create_app():
                     ('address', 'VARCHAR(500)'),
                     ('location_source', 'VARCHAR(20)'),
                     ('location_updated_at', 'TIMESTAMP WITHOUT TIME ZONE'),
+                    ('heading', 'DOUBLE PRECISION'),
                 ):
                     r = db.session.execute(text("""
                         SELECT EXISTS (

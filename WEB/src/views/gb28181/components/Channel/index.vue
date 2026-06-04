@@ -47,9 +47,19 @@
       </template>
     </BasicTable>
     <div v-else>
-      <ChannelCardList :params="channelListParams" :api="queryChannelList"
-                       @get-method="getMethod" @delete="handleDel" @edit="handleEdit"
-                       @play="handlePlay" @device-record="handleDeviceRecord" @snapshot="handleSnapshot" @cloud-record="handleCloudRecord">
+      <ChannelCardList
+        :params="channelListParams"
+        :api="queryChannelList"
+        :show-location-action="enableLocation"
+        @get-method="getMethod"
+        @delete="handleDel"
+        @edit="handleEdit"
+        @play="handlePlay"
+        @set-location="handleSetLocation"
+        @device-record="handleDeviceRecord"
+        @snapshot="handleSnapshot"
+        @cloud-record="handleCloudRecord"
+      >
         <template #header>
           <a-button type="default" @click="handleClickSwap" preIcon="ant-design:swap-outlined">
             切换视图
@@ -76,7 +86,12 @@ import ChannelModal from "@/views/gb28181/components/ChannelModal/index.vue";
 import {batchDeleteGbChannels, deleteGbChannel, queryChannelList, snapshot} from "@/api/device/gb28181";
 import DialogPlayer from "@/components/VideoPlayer/DialogPlayer.vue";
 import {downloadByA} from "@/utils";
-import { resolveGbChannelPlayIds } from '@/views/camera/utils/gb28181Channel';
+import {
+  buildGbChannelLocationDevice,
+  normalizeWvpChannelItem,
+  resolveGbChannelPlayIds,
+} from '@/views/camera/utils/gb28181Channel';
+import type { DeviceLocationDrawerRecord } from '@/views/camera/utils/deviceLocation';
 
 
 defineOptions({name: 'Channel'})
@@ -85,6 +100,12 @@ const props = defineProps<{
   /** 嵌入设备列表详情页时传入 SIP 设备编码 */
   deviceIdentification?: string;
   embedded?: boolean;
+  /** 嵌入摄像头设备列表时展示「设置坐标」 */
+  enableLocation?: boolean;
+}>();
+
+const emit = defineEmits<{
+  setLocation: [record: DeviceLocationDrawerRecord];
 }>();
 
 const checkedKeys = ref<Array<string | number>>([]);
@@ -141,12 +162,13 @@ const [
     return params;
   },
   afterFetch: (data) => {
-    const list = data.map((res) => {
-      let newDate = new Date(res.createdTime);
-      res.createdTime = moment(newDate)?.format?.('YYYY-MM-DD HH:mm:ss') ?? res.createdTime;
-      return res;
+    const sip = sipDeviceId.value;
+    return data.map((res) => {
+      const row = normalizeWvpChannelItem(res, sip);
+      const newDate = new Date(row.createdTime);
+      row.createdTime = moment(newDate)?.format?.('YYYY-MM-DD HH:mm:ss') ?? row.createdTime;
+      return row;
     });
-    return list;
   },
   columns: getBasicColumns(),
   useSearchForm: true,
@@ -272,6 +294,15 @@ function getMethod(m: any) {
 function handleEdit(record) {
   openAddModal(true, {record});
   cardListReload();
+}
+
+function handleSetLocation(record: Record<string, any>) {
+  const device = buildGbChannelLocationDevice(record, sipDeviceId.value);
+  if (!device) {
+    createMessage.warning('无法解析通道编码，请检查 WVP 通道数据');
+    return;
+  }
+  emit('setLocation', device);
 }
 
 //播放按钮事件：设备号优先用路由（当前为某设备下的通道列表）；通道号用 channelId 或 deviceId

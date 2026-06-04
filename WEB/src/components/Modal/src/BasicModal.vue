@@ -31,9 +31,8 @@ const modalMethods: ModalMethods = {
   emitOpen: undefined,
   redoModalHeight: () => {
     nextTick(() => {
-      if (unref(modalWrapperRef)) {
-        ;(unref(modalWrapperRef) as any).setModalHeight()
-      }
+      const wrapper = unref(modalWrapperRef) as any
+      wrapper?.setModalHeight?.()
     })
   },
 }

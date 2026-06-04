@@ -4455,8 +4455,36 @@ def init_minio_buckets_and_upload():
             secure=minio_secure
         )
         
-        # 创建存储桶
+        # 创建存储桶并统一设置公开读写策略（桶已存在时也必须补齐，否则 download API 返回 500）
+        import json
         created_buckets = 0
+        public_policy = lambda bucket_name: {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Principal": {"AWS": ["*"]},
+                    "Action": [
+                        "s3:GetBucketLocation",
+                        "s3:ListBucket",
+                        "s3:ListBucketMultipartUploads"
+                    ],
+                    "Resource": [f"arn:aws:s3:::{bucket_name}"]
+                },
+                {
+                    "Effect": "Allow",
+                    "Principal": {"AWS": ["*"]},
+                    "Action": [
+                        "s3:ListMultipartUploadParts",
+                        "s3:PutObject",
+                        "s3:GetObject",
+                        "s3:DeleteObject",
+                        "s3:AbortMultipartUpload"
+                    ],
+                    "Resource": [f"arn:aws:s3:::{bucket_name}/*"]
+                }
+            ]
+        }
         for bucket_name in buckets:
             try:
                 if client.bucket_exists(bucket_name):
@@ -4465,78 +4493,11 @@ def init_minio_buckets_and_upload():
                     client.make_bucket(bucket_name)
                     print(f"BUCKET_CREATED:{bucket_name}")
                     created_buckets += 1
-                    
-                    # 设置存储桶策略为公开读写
-                    # 注意：存储桶操作和对象操作需要分开配置
-                    policy = {
-                        "Version": "2012-10-17",
-                        "Statement": [
-                            {
-                                "Effect": "Allow",
-                                "Principal": "*",
-                                "Action": [
-                                    "s3:GetBucketLocation",
-                                    "s3:ListBucket",
-                                    "s3:ListBucketMultipartUploads"
-                                ],
-                                "Resource": [f"arn:aws:s3:::{bucket_name}"]
-                            },
-                            {
-                                "Effect": "Allow",
-                                "Principal": "*",
-                                "Action": [
-                                    "s3:ListMultipartUploadParts",
-                                    "s3:PutObject",
-                                    "s3:GetObject",
-                                    "s3:DeleteObject",
-                                    "s3:AbortMultipartUpload"
-                                ],
-                                "Resource": [f"arn:aws:s3:::{bucket_name}/*"]
-                            }
-                        ]
-                    }
-                    import json
-                    client.set_bucket_policy(bucket_name, json.dumps(policy))
+                client.set_bucket_policy(bucket_name, json.dumps(public_policy(bucket_name)))
+                print(f"BUCKET_POLICY_PUBLIC:{bucket_name}")
             except S3Error as e:
                 print(f"BUCKET_ERROR:{bucket_name}:{str(e)}")
                 sys.exit(1)
-        
-        # record-space 必须公开可读（若桶已存在而无策略，上面分支不会写入策略，此处统一补齐）
-        try:
-            import json
-            if client.bucket_exists("record-space"):
-                rs_policy = {
-                    "Version": "2012-10-17",
-                    "Statement": [
-                        {
-                            "Effect": "Allow",
-                            "Principal": "*",
-                            "Action": [
-                                "s3:GetBucketLocation",
-                                "s3:ListBucket",
-                                "s3:ListBucketMultipartUploads"
-                            ],
-                            "Resource": ["arn:aws:s3:::record-space"]
-                        },
-                        {
-                            "Effect": "Allow",
-                            "Principal": "*",
-                            "Action": [
-                                "s3:ListMultipartUploadParts",
-                                "s3:PutObject",
-                                "s3:GetObject",
-                                "s3:DeleteObject",
-                                "s3:AbortMultipartUpload"
-                            ],
-                            "Resource": ["arn:aws:s3:::record-space/*"]
-                        }
-                    ]
-                }
-                client.set_bucket_policy("record-space", json.dumps(rs_policy))
-                print("BUCKET_POLICY_PUBLIC:record-space")
-        except S3Error as e:
-            print(f"BUCKET_ERROR:record-space:{str(e)}")
-            sys.exit(1)
         
         print(f"BUCKETS_SUCCESS:{created_buckets}/{len(buckets)}")
         

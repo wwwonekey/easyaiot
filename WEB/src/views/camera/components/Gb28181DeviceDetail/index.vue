@@ -7,7 +7,12 @@
       @back="emit('back')"
     />
     <div class="gb-detail-body">
-      <Channel :device-identification="sipDeviceId" embedded />
+      <Channel
+        :device-identification="sipDeviceId"
+        embedded
+        enable-location
+        @set-location="(record) => emit('setLocation', record)"
+      />
     </div>
   </div>
 </template>
@@ -24,6 +29,7 @@ defineProps<{
 
 const emit = defineEmits<{
   back: [];
+  setLocation: [record: { id: string; name?: string }];
 }>();
 </script>
 

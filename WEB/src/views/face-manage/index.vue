@@ -334,7 +334,7 @@ function onImageError(e: Event) {
 }
 
 function goBack() {
-  router.push({ path: '/camera/index', query: { tab: '9' } });
+  router.push({ path: '/camera/index', query: { tab: '10' } });
 }
 
 async function loadLibrary() {

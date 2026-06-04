@@ -26,7 +26,7 @@
         </div>
       </div>
     </div>
-    <div class="btns nvr-card-btns" @click.stop>
+    <div class="btns" @click.stop>
       <div class="btn" title="挂载摄像头" @click="emit('open', item)">
         <Icon icon="ant-design:cluster-outlined" :size="16" color="#3B82F6" />
       </div>
@@ -98,10 +98,6 @@ function handleCopy() {
   .copy-icon {
     flex-shrink: 0;
   }
-}
-
-.nvr-card-btns {
-  width: 200px !important;
 }
 
 .nvr-card-img .img {

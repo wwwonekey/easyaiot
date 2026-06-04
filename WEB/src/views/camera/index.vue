@@ -8,14 +8,17 @@
         :tabBarGutter="60"
         @tabClick="handleTabClick"
       >
-        <TabPane key="1" tab="分屏监控">
+        <TabPane key="1" tab="地图分布">
+          <CameraMapDistribution ref="cameraMapDistributionRef" />
+        </TabPane>
+        <TabPane key="2" tab="分屏监控">
           <SplitScreenMonitor
             ref="splitScreenMonitorRef"
             :initial-mode="splitScreenInitialMode"
             @play="handleCardPlay"
           />
         </TabPane>
-        <TabPane key="2" tab="设备列表">
+        <TabPane key="3" tab="设备列表">
           <GpuStackMonitorTip class="page-monitor-tip" />
           <DeviceCreate
             v-if="deviceCreateVisible"
@@ -31,100 +34,78 @@
             :title="gbDetailTitle"
             channel-hint="点击下方通道进行点播播放"
             @back="closeGbDetail"
+            @set-location="openDeviceLocationDrawer"
           />
           <NvrDeviceDetail
             v-else-if="nvrDetailVisible"
             ref="nvrDeviceDetailRef"
             :nvr-id="nvrDetailId"
             :title="nvrDetailTitle"
-            :device-stream-statuses="deviceStreamStatuses"
             @back="closeNvrDetail"
             @view="handleNvrChannelView"
             @edit="handleNvrChannelEdit"
             @play="handleCardPlay"
             @playAI="handleCardPlayAI"
-            @toggleStream="handleCardToggleStream"
             @delete="handleNvrChannelDelete"
+            @set-location="openDeviceLocationDrawer"
           />
           <template v-else>
-          <!-- 列表模式 -->
-          <BasicTable v-if="viewMode === 'table'" @register="registerTable">
-                <template #toolbar>
-                  <div class="toolbar-buttons">
-                    <a-button type="primary" @click="openDeviceCreate()">
-                      <template #icon>
-                        <VideoCameraAddOutlined/>
-                      </template>
-                      添加设备
-                    </a-button>
-                    <a-button @click="handleToggleViewMode" type="default">
-                      <template #icon>
-                        <SwapOutlined />
-                      </template>
-                      切换视图
-                    </a-button>
-                  </div>
+          <!-- 表格模式 -->
+          <div v-if="viewMode === 'table'" class="device-list-table-wrap">
+            <BasicTable @register="registerTable">
+              <template #toolbar>
+                <div class="device-list-toolbar">
+                  <Button type="primary" pre-icon="ant-design:video-camera-add-outlined" @click="openDeviceCreate()">
+                    添加设备
+                  </Button>
+                  <Button pre-icon="ant-design:import-outlined" @click="openBatchLocationModal(true)">
+                    导入坐标
+                  </Button>
+                  <a-button type="default" @click="handleToggleViewMode">
+                    <template #icon><SwapOutlined /></template>
+                    切换视图
+                  </a-button>
+                </div>
+              </template>
+              <template #bodyCell="{ column, record }">
+                <template v-if="column.dataIndex === 'name'">
+                  <span
+                    class="device-list-table__copyable"
+                    :title="formatCameraDeviceLabel(record)"
+                    @click="handleCopy(formatCameraDeviceLabel(record))"
+                  >
+                    <Icon icon="tdesign:copy-filled" color="#4287FCFF" />
+                    {{ formatCameraDeviceLabel(record) }}
+                  </span>
                 </template>
-                <template #bodyCell="{ column, record }">
-                  <template v-if="column.dataIndex === 'name'">
-                    <span style="cursor: pointer" @click="handleCopy(record.name)">
-                      <Icon icon="tdesign:copy-filled" color="#4287FCFF"/>
-                      {{ formatCameraDeviceLabel(record) }}
-                    </span>
-                  </template>
-                  <template v-else-if="column.key === 'model'">
-                    <span
-                      v-if="hasCopyableDeviceModel(record.model)"
-                      style="cursor: pointer"
-                      @click="handleCopy(record.model)"
-                    >
-                      <Icon icon="tdesign:copy-filled" color="#4287FCFF"/> {{ record.model }}
-                    </span>
-                    <span v-else>{{ record.model || '-' }}</span>
-                  </template>
-                  <template v-else-if="column.key === 'manufacturer'">
-                    <span
-                      v-if="hasCopyableManufacturer(record.manufacturer)"
-                      style="cursor: pointer"
-                      @click="handleCopy(record.manufacturer)"
-                    >
-                      <Icon icon="tdesign:copy-filled" color="#4287FCFF"/> {{ record.manufacturer }}
-                    </span>
-                    <span v-else>{{ record.manufacturer || '-' }}</span>
-                  </template>
-                  <template v-else-if="column.key === 'ip'">
-                    <span
-                      v-if="hasCopyableDeviceIp(record.ip)"
-                      style="cursor: pointer"
-                      @click="handleCopy(record.ip)"
-                    >
-                      <Icon icon="tdesign:copy-filled" color="#4287FCFF"/> {{ record.ip }}
-                    </span>
-                    <span v-else>{{ record.ip || '-' }}</span>
-                  </template>
-                  <template
-                    v-else-if="['id', 'source', 'rtmp_stream', 'http_stream', 'ai_rtmp_stream', 'ai_http_stream'].includes(column.key)">
-            <span style="cursor: pointer" @click="handleCopy(record[column.key])"><Icon
-              icon="tdesign:copy-filled" color="#4287FCFF"/> {{ record[column.key] }}</span>
-                  </template>
-
-                  <!-- 流媒体状态显示 -->
-                  <template v-else-if="column.dataIndex === 'stream_status'">
-                    <a-tag :color="getStreamStatusColor(record.stream_status)">
-                      {{ getStreamStatusText(record.stream_status) }}
-                    </a-tag>
-                  </template>
-
-                  <template v-else-if="column.dataIndex === 'action'">
-                    <TableAction
-                      :actions="getTableActions(record)"
-                    />
-                  </template>
+                <template v-else-if="column.dataIndex === 'stream_status'">
+                  <a-tag :color="getStreamStatusColor(getRecordStreamStatus(record.id))">
+                    {{ getStreamStatusText(getRecordStreamStatus(record.id)) }}
+                  </a-tag>
                 </template>
-              </BasicTable>
+                <template v-else-if="column.dataIndex === 'has_location'">
+                  <a
+                    v-if="canSetDeviceLocation(record)"
+                    class="device-list-table__location-link"
+                    :title="hasDeviceLocation(record) ? '点击修改坐标' : '点击设置坐标'"
+                    @click.prevent="openDeviceLocationDrawer(record)"
+                  >
+                    {{
+                      hasDeviceLocation(record)
+                        ? formatLocationSummary(record)
+                        : '未设置'
+                    }}
+                  </a>
+                  <span v-else class="device-list-table__location-muted">—</span>
+                </template>
+                <template v-else-if="column.dataIndex === 'action'">
+                  <TableAction :actions="getTableActions(record)" />
+                </template>
+              </template>
+            </BasicTable>
+          </div>
 
-              <!-- 卡片模式 -->
-              <div v-else class="card-mode-wrapper">
+          <div v-else class="card-mode-wrapper">
                 <DeviceMixedCardList
                   ref="deviceMixedCardListRef"
                   :params="{}"
@@ -133,7 +114,6 @@
                   @delete="handleCardDelete"
                   @play="handleCardPlay"
                   @playAI="handleCardPlayAI"
-                  @toggleStream="handleCardToggleStream"
                   @open-gb-device="handleOpenGbDevice"
                   @refresh-gb-device="handleRefreshGbDevice"
                   @view-gb-device="handleViewGbDevice"
@@ -143,64 +123,68 @@
                   @view-nvr-device="handleViewNvrDevice"
                   @edit-nvr-device="handleEditNvrDevice"
                   @delete-nvr-device="handleDeleteNvrDevice"
+                  @set-location="handleCardSetLocation"
                 >
                   <template #header>
-                    <a-button type="primary" @click="openDeviceCreate()">
-                      <template #icon>
-                        <VideoCameraAddOutlined/>
-                      </template>
-                      添加设备
-                    </a-button>
-                    <a-button @click="handleToggleViewMode" type="default">
-                      <template #icon>
-                        <SwapOutlined />
-                      </template>
-                      切换视图
-                    </a-button>
+                    <div class="device-list-toolbar device-list-toolbar--card">
+                      <Button type="primary" pre-icon="ant-design:video-camera-add-outlined" @click="openDeviceCreate()">
+                        添加设备
+                      </Button>
+                      <Button pre-icon="ant-design:import-outlined" @click="openBatchLocationModal(true)">
+                        导入坐标
+                      </Button>
+                      <a-button type="default" @click="handleToggleViewMode">
+                        <template #icon><SwapOutlined /></template>
+                        切换视图
+                      </a-button>
+                    </div>
                   </template>
-                </DeviceMixedCardList>
-              </div>
+            </DeviceMixedCardList>
+          </div>
           </template>
 
           <DialogPlayer title="视频播放" @register="registerPlayerAddModel"
                         @success="handlePlayerSuccess"/>
+          <BatchLocationImportModal @register="registerBatchLocationModal" @success="handleLocationImportSuccess" />
           <VideoModal @register="registerAddModel" @success="handleSuccess"/>
           <Gb28181DeviceModal @register="registerGbDeviceModal" @success="handleSuccess"/>
           <NvrDeviceModal @register="registerNvrDeviceModal" @success="handleSuccess"/>
         </TabPane>
-        <TabPane key="3" tab="抓拍空间">
+        <TabPane key="4" tab="抓拍空间">
           <SnapSpace ref="snapSpaceRef"/>
         </TabPane>
-        <TabPane key="4" tab="录像空间">
+        <TabPane key="5" tab="录像空间">
           <RecordSpace ref="recordSpaceRef"/>
         </TabPane>
-        <TabPane key="5" tab="推流转发">
+        <TabPane key="6" tab="推流转发">
           <StreamForward ref="streamForwardRef"/>
         </TabPane>
-        <TabPane key="6" tab="算法任务">
+        <TabPane key="7" tab="算法任务">
           <AlgorithmTask ref="algorithmTaskRef"/>
         </TabPane>
-        <TabPane key="7" tab="拉流代理">
+        <TabPane key="8" tab="拉流代理">
           <Gb28181PullProxy ref="gb28181PullProxyRef"/>
         </TabPane>
-        <TabPane key="8" tab="节点管理">
+        <TabPane key="9" tab="节点管理">
           <Gb28181Node ref="gb28181NodeRef"/>
         </TabPane>
-        <TabPane key="9" tab="人脸库">
+        <TabPane key="10" tab="人脸库">
           <FaceLibrary ref="faceLibraryRef"/>
         </TabPane>
-        <TabPane key="10" tab="车牌库">
+        <TabPane key="11" tab="车牌库">
           <PlateLibrary ref="plateLibraryRef"/>
         </TabPane>
       </Tabs>
     </div>
+    <DeviceLocationDrawer @register="registerLocationDrawer" @success="handleLocationDrawerSuccess" />
   </div>
 </template>
 
 <script lang="ts" setup>
-import {onMounted, onUnmounted, reactive, ref} from 'vue';
+import {nextTick, onMounted, onUnmounted, reactive, ref, watch} from 'vue';
 import {useRoute} from 'vue-router';
 import {TabPane, Tabs} from 'ant-design-vue';
+import { SwapOutlined } from '@ant-design/icons-vue';
 import {BasicTable, TableAction, useTable} from '@/components/Table';
 import {useMessage} from '@/hooks/web/useMessage';
 import {getBasicColumns, getFormConfig} from "./Data";
@@ -213,16 +197,12 @@ import {
   DeviceInfo,
   getDeviceList,
   getStreamStatus,
-  startStreamForwarding,
-  stopStreamForwarding,
   StreamStatusResponse,
 } from '@/api/device/camera';
-import {
-  SwapOutlined,
-  VideoCameraAddOutlined,
-} from '@ant-design/icons-vue';
 import DialogPlayer from "@/components/VideoPlayer/DialogPlayer.vue";
+import { Button } from '@/components/Button';
 import SplitScreenMonitor from "./components/SplitScreenMonitor/index.vue";
+import CameraMapDistribution from './components/CameraMapDistribution/index.vue';
 import SnapSpace from "./components/SnapSpace/index.vue";
 import AlgorithmTask from "./components/AlgorithmTask/index.vue";
 import FaceLibrary from "./components/FaceLibrary/index.vue";
@@ -244,12 +224,7 @@ import { deleteGb28181SipDevice } from './utils/gb28181DeviceDelete';
 import { isNvrListRow } from './utils/deviceLabel';
 import StreamForward from "./components/StreamForward/index.vue";
 import Gb28181PullProxy from "@/views/gb28181/components/PullProxy/index.vue";
-import {
-  formatCameraDeviceLabel,
-  hasCopyableDeviceIp,
-  hasCopyableDeviceModel,
-  hasCopyableManufacturer,
-} from './utils/deviceLabel';
+import { formatCameraDeviceLabel } from './utils/deviceLabel';
 import {
   hasDirectPlayStream,
   openDeviceInDialogPlayer,
@@ -257,6 +232,13 @@ import {
 } from './utils/devicePlay';
 import Gb28181Node from "@/views/gb28181/components/Node/index.vue";
 import GpuStackMonitorTip from '@/components/GpuStackMonitorTip/index.vue';
+import BatchLocationImportModal from './components/BatchLocationImportModal/index.vue';
+import DeviceLocationDrawer from './components/DeviceLocationDrawer/index.vue';
+import {
+  canSetDeviceLocation,
+  formatLocationSummary,
+  hasDeviceLocation,
+} from './utils/deviceLocation';
 import {
   parseDeviceCreateQuery,
   type CameraBrand,
@@ -274,6 +256,8 @@ const [registerGbDeviceModal, {openModal: openGbDeviceModal}] = useModal();
 const [registerNvrDeviceModal, {openModal: openNvrDeviceModal}] = useModal();
 
 const [registerPlayerAddModel, {openModal: openPlayerAddModel}] = useModal();
+const [registerBatchLocationModal, {openModal: openBatchLocationModal}] = useModal();
+const [registerLocationDrawer, { openModal: openLocationModal }] = useModal();
 
 // Tab状态
 const state = reactive({
@@ -283,8 +267,18 @@ const state = reactive({
 // 视图模式（默认卡片模式）
 const viewMode = ref<'table' | 'card'>('card');
 
+function handleToggleViewMode() {
+  viewMode.value = viewMode.value === 'card' ? 'table' : 'card';
+  if (viewMode.value === 'table') {
+    reload();
+  } else {
+    deviceMixedCardListRef.value?.fetch?.();
+  }
+}
+
 // 分屏监控组件引用
 const splitScreenMonitorRef = ref();
+const cameraMapDistributionRef = ref();
 const splitScreenInitialMode = ref<'config' | 'monitor'>('monitor');
 
 // 混合设备卡片列表引用
@@ -329,38 +323,33 @@ const streamForwardRef = ref();
 const gb28181PullProxyRef = ref();
 const gb28181NodeRef = ref();
 
-/** 一级 Tab key：1 分屏监控 … 8 节点管理（与模板 TabPane key 一致） */
+/** 一级 Tab key（与模板 TabPane 从左到右顺序一致） */
 const CAMERA_TAB_KEYS = {
-  SPLIT_MONITOR: '1',
-  DEVICE_LIST: '2',
-  SNAP: '3',
-  RECORD: '4',
-  STREAM_FORWARD: '5',
-  ALGORITHM: '6',
-  GB_PULL_PROXY: '7',
-  GB_NODE: '8',
-  FACE_LIBRARY: '9',
-  PLATE_LIBRARY: '10',
+  CAMERA_MAP: '1',
+  SPLIT_MONITOR: '2',
+  DEVICE_LIST: '3',
+  SNAP: '4',
+  RECORD: '5',
+  STREAM_FORWARD: '6',
+  ALGORITHM: '7',
+  GB_PULL_PROXY: '8',
+  GB_NODE: '9',
+  FACE_LIBRARY: '10',
+  PLATE_LIBRARY: '11',
 } as const;
 
 const CAMERA_TAB_ID_SET = new Set<string>(Object.values(CAMERA_TAB_KEYS));
 
-/** 旧版 tab 编号兼容（已移除「设备目录」独立 Tab） */
+/** 旧版 tab 编号兼容（仅处理当前 1～11 以外的历史编号） */
 const LEGACY_CAMERA_TAB_MAP: Record<string, string> = {
-  '3': CAMERA_TAB_KEYS.SPLIT_MONITOR,
-  '4': CAMERA_TAB_KEYS.SNAP,
-  '5': CAMERA_TAB_KEYS.RECORD,
-  '6': CAMERA_TAB_KEYS.STREAM_FORWARD,
-  '7': CAMERA_TAB_KEYS.ALGORITHM,
-  '8': CAMERA_TAB_KEYS.GB_PULL_PROXY,
-  '9': CAMERA_TAB_KEYS.GB_NODE,
+  '12': CAMERA_TAB_KEYS.DEVICE_LIST,
 };
 
-/** 路由 ?tab=：接受 1～8；旧 3（设备目录）映射到分屏监控 */
+/** 路由 ?tab=：优先匹配当前编号；旧编号通过 LEGACY_CAMERA_TAB_MAP 映射 */
 function normalizeCameraRouteTab(tab: string): string {
   if (CAMERA_TAB_ID_SET.has(tab)) return tab;
   if (LEGACY_CAMERA_TAB_MAP[tab]) return LEGACY_CAMERA_TAB_MAP[tab];
-  return CAMERA_TAB_KEYS.DEVICE_LIST;
+  return CAMERA_TAB_KEYS.CAMERA_MAP;
 }
 
 // Tab切换
@@ -395,6 +384,9 @@ const handleTabClick = (activeKey: string) => {
   if (activeKey === CAMERA_TAB_KEYS.SPLIT_MONITOR && splitScreenMonitorRef.value) {
     splitScreenMonitorRef.value.refresh();
   }
+  if (activeKey === CAMERA_TAB_KEYS.CAMERA_MAP && cameraMapDistributionRef.value) {
+    cameraMapDistributionRef.value.refresh();
+  }
   // GB28181 拉流/节点 Tab 可按需在此 refresh
   // if (activeKey === CAMERA_TAB_KEYS.GB_PULL_PROXY && gb28181PullProxyRef.value) {
   //   gb28181PullProxyRef.value.refresh();
@@ -404,13 +396,14 @@ const handleTabClick = (activeKey: string) => {
   // }
 };
 
-// 切换视图模式
-const handleToggleViewMode = () => {
-  viewMode.value = viewMode.value === 'table' ? 'card' : 'table';
-  if (viewMode.value === 'card' && deviceMixedCardListRef.value) {
+// 切换视图时刷新对应列表
+watch(viewMode, (mode) => {
+  if (mode === 'table') {
+    reload();
+  } else if (deviceMixedCardListRef.value) {
     deviceMixedCardListRef.value.fetch();
   }
-};
+});
 
 function openGbDetail(summary: GbSipDeviceSummary) {
   gbDetailSipId.value = summary.sipDeviceId;
@@ -610,6 +603,10 @@ const checkAllDevicesStreamStatus = async (devices: DeviceInfo[]) => {
   }
 };
 
+function getRecordStreamStatus(deviceId: string) {
+  return (deviceStreamStatuses.value && deviceStreamStatuses.value[deviceId]) || 'unknown';
+}
+
 const [registerTable, {reload}] = useTable({
   canResize: true,
   showIndexColumn: false,
@@ -625,6 +622,12 @@ const [registerTable, {reload}] = useTable({
     totalField: 'total',
   },
   rowKey: 'id',
+  scroll: { x: 1200 },
+  beforeFetch: (params) => ({
+    ...params,
+    search: params.search ?? params.deviceName,
+    deviceName: params.deviceName ?? params.search,
+  }),
   // 添加成功回调，获取设备流状态
   onSuccess: (data) => {
     if (data && data.data) {
@@ -700,8 +703,8 @@ const getTableActions = (record) => {
         },
       },
       {
-        icon: 'ant-design:delete-outlined',
-        color: 'error',
+        icon: 'material-symbols:delete-outline-rounded',
+        danger: true,
         tooltip: '删除',
         popConfirm: {
           title: '删除后挂载摄像头将解除关联，是否确认？',
@@ -737,8 +740,8 @@ const getTableActions = (record) => {
       },
       {
         icon: 'material-symbols:delete-outline-rounded',
+        danger: true,
         tooltip: '删除',
-        color: 'error',
         popConfirm: {
           title: '删除后 WVP 国标设备及已同步的通道将移除，是否确认？',
           confirm: () => handleDeleteGbDevice(record),
@@ -765,21 +768,13 @@ const getTableActions = (record) => {
     });
   }
 
-  if (supportsRtspForward(record)) {
-    const currentStatus = (deviceStreamStatuses.value && deviceStreamStatuses.value[record.id]) || 'unknown';
-    if (currentStatus === 'running') {
-      actions.push({
-        icon: 'ant-design:pause-circle-outlined',
-        tooltip: '停止RTSP转发',
-        onClick: () => handleDisableRtsp(record),
-      });
-    } else {
-      actions.push({
-        icon: 'ant-design:swap-outline',
-        tooltip: '启用RTSP转发',
-        onClick: () => handleEnableRtsp(record),
-      });
-    }
+  if (canSetDeviceLocation(record)) {
+    actions.unshift({
+      icon: 'ant-design:environment-outlined',
+      tooltip: '设置坐标',
+      label: '坐标',
+      onClick: () => openDeviceLocationDrawer(record),
+    });
   }
 
   // 添加详情、编辑、删除按钮
@@ -796,90 +791,21 @@ const getTableActions = (record) => {
     },
     {
       icon: 'material-symbols:delete-outline-rounded',
+      danger: true,
       tooltip: '删除',
       popConfirm: {
         title: '确定删除此设备？',
-        confirm: () => handleDelete(record)
-      }
-    }
+        confirm: () => handleDelete(record),
+      },
+    },
   );
 
   return actions;
 };
 
-// 启用RTSP转发
-const handleEnableRtsp = async (record) => {
-  try {
-    // 确保 deviceStreamStatuses.value 始终是一个对象
-    if (!deviceStreamStatuses.value) {
-      deviceStreamStatuses.value = {};
-    }
-    createMessage.loading({content: '正在启动RTSP转发...', key: 'rtsp'});
-
-    const response = await startStreamForwarding(record.id);
-    if (response.code === 0) {
-      createMessage.success({content: 'RTSP转发已启动', key: 'rtsp'});
-      // 更新设备状态
-      deviceStreamStatuses.value[record.id] = 'running';
-      // 更新卡片列表中的流状态
-      if (deviceMixedCardListRef.value && deviceMixedCardListRef.value.deviceStreamStatuses) {
-        deviceMixedCardListRef.value.deviceStreamStatuses[record.id] = 'running';
-      }
-      // 重新加载数据
-      handleSuccess();
-    } else {
-      createMessage.error({content: `启动失败: ${response.data.msg}`, key: 'rtsp'});
-      deviceStreamStatuses.value[record.id] = 'error';
-    }
-  } catch (error) {
-    console.error('启动RTSP转发失败', error);
-    createMessage.error({content: '启动RTSP转发失败', key: 'rtsp'});
-    // 确保 deviceStreamStatuses.value 始终是一个对象
-    if (!deviceStreamStatuses.value) {
-      deviceStreamStatuses.value = {};
-    }
-    deviceStreamStatuses.value[record.id] = 'error';
-  }
-};
-
 // 表格刷新
 function handlePlayerSuccess() {
 }
-
-// 停止RTSP转发
-const handleDisableRtsp = async (record) => {
-  try {
-    // 确保 deviceStreamStatuses.value 始终是一个对象
-    if (!deviceStreamStatuses.value) {
-      deviceStreamStatuses.value = {};
-    }
-    createMessage.loading({content: '正在停止RTSP转发...', key: 'rtsp'});
-
-    const response = await stopStreamForwarding(record.id);
-    if (response.code === 0) {
-      createMessage.success({content: 'RTSP转发已停止', key: 'rtsp'});
-      // 更新设备状态
-      deviceStreamStatuses.value[record.id] = 'stopped';
-      // 更新卡片列表中的流状态
-      if (deviceMixedCardListRef.value && deviceMixedCardListRef.value.deviceStreamStatuses) {
-        deviceMixedCardListRef.value.deviceStreamStatuses[record.id] = 'stopped';
-      }
-      // 重新加载数据
-      handleSuccess();
-    } else {
-      createMessage.error({content: `停止失败: ${response.data.msg}`, key: 'rtsp'});
-      deviceStreamStatuses.value[record.id] = 'error';
-    }
-  } catch (error) {
-    console.error('停止RTSP转发失败', error);
-    createMessage.error({content: '停止RTSP转发失败', key: 'rtsp'});
-    // 确保 deviceStreamStatuses.value 始终是一个对象
-    if (!deviceStreamStatuses.value) {
-      deviceStreamStatuses.value = {};
-    }
-    deviceStreamStatuses.value[record.id] = 'error';
-  }
-};
 
 function handlePlay(record: DeviceInfo) {
   if (!openDeviceInDialogPlayer(openPlayerAddModel, record)) {
@@ -932,14 +858,30 @@ function handleDeviceCreateSuccess() {
   handleSuccess();
 }
 
-// 刷新数据
-const handleSuccess = () => {
+function handleLocationImportSuccess() {
+  handleLocationDrawerSuccess();
+}
+
+function openDeviceLocationDrawer(record: DeviceInfo | { id: string; name?: string }) {
+  if (!canSetDeviceLocation(record)) return;
+  openLocationModal(true, { deviceId: record.id, record });
+}
+
+function handleLocationDrawerSuccess() {
+  handleSuccess();
+}
+
+function handleCardSetLocation(record: DeviceInfo) {
+  openDeviceLocationDrawer(record);
+}
+
+function handleSuccess() {
   if (viewMode.value === 'table') {
     reload();
   } else if (deviceMixedCardListRef.value) {
     deviceMixedCardListRef.value.fetch();
   }
-};
+}
 
 // 删除设备
 const handleDelete = async (record) => {
@@ -993,20 +935,6 @@ const handleCardPlayAI = (record) => {
   handlePlayAIStream(record);
 };
 
-const handleCardToggleStream = async (record) => {
-  const currentStatus = (deviceStreamStatuses.value && deviceStreamStatuses.value[record.id]) || 'unknown';
-  if (currentStatus === 'running') {
-    await handleDisableRtsp(record);
-  } else {
-    await handleEnableRtsp(record);
-  }
-  // 刷新卡片列表
-  if (deviceMixedCardListRef.value) {
-    deviceMixedCardListRef.value.fetch();
-  }
-};
-
-
 // 组件挂载时启动状态检查定时器
 onMounted(() => {
   // 已禁用自动状态检查定时器
@@ -1016,7 +944,9 @@ onMounted(() => {
   if (rawTab === '3' || route.query.mode === 'config') {
     splitScreenInitialMode.value = 'config';
   }
-  if (rawTab) {
+  if (route.query.mode === 'map') {
+    state.activeKey = CAMERA_TAB_KEYS.CAMERA_MAP;
+  } else if (rawTab) {
     state.activeKey = normalizeCameraRouteTab(rawTab);
   } else if (route.query.mode === 'config') {
     state.activeKey = CAMERA_TAB_KEYS.SPLIT_MONITOR;
@@ -1024,6 +954,11 @@ onMounted(() => {
   if (route.query.action === 'create' && state.activeKey === CAMERA_TAB_KEYS.DEVICE_LIST) {
     const parsed = parseDeviceCreateQuery(route.query as Record<string, unknown>);
     openDeviceCreate(parsed);
+  }
+  if (state.activeKey === CAMERA_TAB_KEYS.CAMERA_MAP) {
+    void nextTick(() => {
+      cameraMapDistributionRef.value?.refresh?.();
+    });
   }
 });
 
@@ -1058,12 +993,100 @@ onUnmounted(() => {
     }
   }
 
-  // 工具栏按钮组
-  .toolbar-buttons {
+  .device-list-toolbar {
     display: flex;
     align-items: center;
+    justify-content: flex-end;
     gap: 8px;
+    flex: 1;
+    width: 100%;
+    margin-left: auto;
+
+    &--card {
+      flex: none;
+      width: auto;
+      margin-left: 0;
+    }
   }
 
+  .device-list-table-wrap {
+    :deep(.vben-basic-table-header__toolbar) {
+      flex: 1;
+      justify-content: flex-end;
+    }
+
+    :deep(.vben-basic-table-form-container) {
+      padding: 12px 12px 0;
+
+      > .ant-form > .ant-row {
+        flex-wrap: nowrap;
+      }
+
+      .ant-form-item {
+        margin-bottom: 16px;
+      }
+
+      .ant-form-item-control-input-content:has(.ant-btn) {
+        display: flex;
+        justify-content: flex-end;
+        flex-wrap: nowrap;
+        gap: 8px;
+        white-space: nowrap;
+      }
+    }
+
+    :deep(.ant-table-wrapper) {
+      padding: 0 12px 12px;
+    }
+
+    :deep(.ant-table-cell) {
+      vertical-align: middle;
+    }
+
+    :deep(.vben-basic-table-action) {
+      flex-wrap: wrap;
+      justify-content: center;
+      row-gap: 2px;
+
+      .ant-btn-link {
+        height: 28px;
+        padding: 4px 6px;
+      }
+
+      .ant-btn-link.ant-btn-dangerous {
+        color: #dc2626;
+
+        &:hover {
+          color: #b91c1c;
+        }
+      }
+    }
+  }
+
+  .device-list-table__copyable {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    max-width: 100%;
+    cursor: pointer;
+    color: rgba(0, 0, 0, 0.88);
+
+    &:hover {
+      color: #4287fc;
+    }
+  }
+
+  .device-list-table__location-link {
+    color: #266cfb;
+    cursor: pointer;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+
+  .device-list-table__location-muted {
+    color: rgba(0, 0, 0, 0.25);
+  }
 }
 </style>

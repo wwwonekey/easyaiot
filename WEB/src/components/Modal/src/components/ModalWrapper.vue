@@ -149,7 +149,7 @@ async function setModalHeight() {
   }
 }
 
-defineExpose({ scrollTop })
+defineExpose({ scrollTop, setModalHeight })
 </script>
 
 <template>

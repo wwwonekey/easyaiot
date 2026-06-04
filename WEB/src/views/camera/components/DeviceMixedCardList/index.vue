@@ -17,7 +17,7 @@
               <span style="padding-left: 7px; font-size: 16px; font-weight: 500; line-height: 24px">
                 摄像头列表
               </span>
-              <div style="display: flex; gap: 8px">
+              <div class="device-list-card-header__actions">
                 <slot name="header" />
               </div>
             </div>
@@ -120,6 +120,7 @@
                   <div
                     v-if="hasDirectPlayStream(item.device)"
                     class="btn"
+                    title="播放视频流"
                     @click="handlePlay(item.device)"
                   >
                     <Icon icon="octicon:play-16" :size="15" color="#3B82F6" />
@@ -127,30 +128,24 @@
                   <div
                     v-if="hasDirectPlayStream(item.device, true)"
                     class="btn"
+                    title="查看AI流"
                     @click="handlePlayAI(item.device)"
                   >
                     <Icon icon="hugeicons:ai-video" :size="15" color="#3B82F6" />
                   </div>
-                  <div class="btn" @click="handleView(item.device)">
+                  <div class="btn" title="详情" @click="handleView(item.device)">
                     <Icon icon="ant-design:eye-filled" :size="15" color="#3B82F6" />
                   </div>
-                  <div class="btn" @click="handleEdit(item.device)">
+                  <div class="btn" title="编辑" @click="handleEdit(item.device)">
                     <Icon icon="ant-design:edit-filled" :size="15" color="#3B82F6" />
                   </div>
                   <div
-                    v-if="supportsRtspForward(item.device)"
+                    v-if="canSetDeviceLocation(item.device)"
                     class="btn"
-                    @click="handleToggleStream(item.device)"
+                    title="设置坐标"
+                    @click="handleSetLocation(item.device)"
                   >
-                    <Icon
-                      :icon="
-                        getDeviceStreamStatus(item.device.id) === 'running'
-                          ? 'ant-design:pause-circle-outlined'
-                          : 'ant-design:swap-outline'
-                      "
-                      :size="15"
-                      color="#3B82F6"
-                    />
+                    <Icon icon="ant-design:environment-outlined" :size="15" color="#3B82F6" />
                   </div>
                   <Popconfirm
                     title="是否确认删除？"
@@ -158,7 +153,7 @@
                     cancel-text="否"
                     @confirm="handleDelete(item.device)"
                   >
-                    <div class="btn">
+                    <div class="btn" title="删除">
                       <Icon icon="material-symbols:delete-outline-rounded" :size="15" color="#DC2626" />
                     </div>
                   </Popconfirm>
@@ -200,7 +195,8 @@ import {
   hasCopyableDeviceModel,
   hasCopyableManufacturer,
 } from '@/views/camera/utils/deviceLabel';
-import { hasDirectPlayStream, supportsRtspForward } from '@/views/camera/utils/devicePlay';
+import { hasDirectPlayStream } from '@/views/camera/utils/devicePlay';
+import { canSetDeviceLocation } from '@/views/camera/utils/deviceLocation';
 import { queryAllVideoList } from '@/api/device/gb28181';
 import {
   buildMergedCardRows,
@@ -224,9 +220,9 @@ const emit = defineEmits([
   'delete',
   'edit',
   'view',
+  'setLocation',
   'play',
   'playAI',
-  'toggleStream',
   'openGbDevice',
   'refreshGbDevice',
   'viewGbDevice',
@@ -347,9 +343,6 @@ function filterRows(rows: CardRow[], p: Record<string, any>): CardRow[] {
   return list;
 }
 
-const getDeviceStreamStatus = (deviceId: string) =>
-  deviceStreamStatuses.value?.[deviceId] || 'unknown';
-
 const getCameraImage = (manufacturer: string) => {
   if (!manufacturer) return OTHER_IMAGE;
   const mfr = manufacturer.toLowerCase();
@@ -467,6 +460,9 @@ function handleView(record: DeviceInfo) {
 function handleEdit(record: DeviceInfo) {
   emit('edit', record);
 }
+function handleSetLocation(record: DeviceInfo) {
+  emit('setLocation', record);
+}
 function handleDelete(record: DeviceInfo) {
   emit('delete', record);
 }
@@ -476,10 +472,6 @@ function handlePlay(record: DeviceInfo) {
 function handlePlayAI(record: DeviceInfo) {
   emit('playAI', record);
 }
-function handleToggleStream(record: DeviceInfo) {
-  emit('toggleStream', record);
-}
-
 async function handleCopy(text: string) {
   if (!text || text === '-') return;
   try {
@@ -516,6 +508,12 @@ defineExpose({
 
 <style lang="less" scoped>
 .camera-card-list-wrapper {
+  .device-list-card-header__actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
   :deep(.ant-list-header) {
     border-block-end: 0;
     padding-top: 0;
@@ -567,7 +565,6 @@ defineExpose({
       flex-direction: column;
       max-width: calc(100% - 128px);
       padding-left: 16px;
-
       .status {
         min-width: 90px;
         height: 25px;
@@ -697,7 +694,7 @@ defineExpose({
 
     .camera-img {
       position: absolute;
-      right: 20px;
+      right: 8px;
       top: 50px;
 
       img {
@@ -799,19 +796,22 @@ defineExpose({
         left: 16px;
         bottom: 16px;
         margin-top: 20px;
-        width: 140px;
+        width: fit-content;
+        max-width: calc(100% - 32px);
         height: 28px;
         border-radius: 45px;
-        justify-content: space-around;
-        padding: 0 10px;
+        justify-content: center;
+        gap: 12px;
+        padding: 0 16px;
         align-items: center;
         border: 2px solid #266cfbff;
 
         .btn {
-          width: 28px;
+          width: 24px;
           height: 22px;
           text-align: center;
           position: relative;
+          flex-shrink: 0;
 
           &:before {
             content: '';
@@ -820,7 +820,7 @@ defineExpose({
             width: 1px;
             height: 7px;
             background-color: #e2e2e2;
-            left: 0;
+            left: -6px;
             top: 9px;
           }
 

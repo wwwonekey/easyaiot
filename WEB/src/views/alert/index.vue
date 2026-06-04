@@ -1,120 +1,187 @@
 <template>
-  <div>
-    <BasicTable v-if="state.isTableMode" @register="registerTable">
-      <template #toolbar>
-        <div style="display: flex; align-items: center; gap: 8px;">
-          <a-button type="default" @click="handleClickSwap"
-                    preIcon="ant-design:swap-outlined">切换视图
-          </a-button>
-          <a-button type="primary" danger @click="handleClearAllAlerts"
-                    preIcon="ant-design:delete-outlined">一键清空告警
-          </a-button>
-        </div>
-      </template>
-      <template #bodyCell="{ column, record }">
-        <template v-if="column.key === 'device_id'">
-          <span style="cursor: pointer" @click="handleCopy(record['device_id'])"><Icon
-            icon="tdesign:copy-filled" color="#4287FCFF"/> {{ formatDeviceId(record['device_id']) }}</span>
-        </template>
-        <template v-if="column.key === 'device_name'">
-          <span style="cursor: pointer" @click="handleCopy(record['device_name'])"><Icon
-            icon="tdesign:copy-filled" color="#4287FCFF"/> {{ record['device_name'] }}</span>
-        </template>
-        <template v-if="column.key === 'task_type'">
-          <a-tag :color="getTaskTypeColor(record['task_type'])">
-            {{ getTaskTypeText(record['task_type']) }}
-          </a-tag>
-        </template>
-        <template v-if="column.dataIndex === 'action'">
-          <TableAction
-            :actions="[
-              {
-                icon: 'ion:image-sharp',
-                tooltip: {
-                  title: '查看告警图片',
-                  placement: 'top',
-                },
-                onClick: handleViewImage.bind(null, record),
-              },
-              {
-                icon: 'icon-park-outline:video',
-                tooltip: {
-                  title: '查看告警录像',
-                  placement: 'top',
-                },
-                onClick: handleViewVideo.bind(null, record),
-              },
-            ]"
-          />
-        </template>
-      </template>
-    </BasicTable>
-    <div v-else>
-      <AlertCards
-        :api="queryAlarmList"
-        :params="params"
-        @getMethod="getMethod"
-        @viewImage="handleCardViewImage"
-        @viewVideo="handleCardViewVideo"
+  <div class="alert-page">
+    <div class="alert-tab">
+      <Tabs
+        :activeKey="state.activeKey"
+        :animated="{ inkBar: true, tabPane: true }"
+        :destroyInactiveTabPane="true"
+        :tabBarGutter="60"
+        @tabClick="handleTabClick"
       >
-        <template #header>
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <a-button type="default" @click="handleClickSwap"
-                      preIcon="ant-design:swap-outlined">切换视图
-            </a-button>
-            <a-button type="primary" danger @click="handleClearAllAlerts"
-                      preIcon="ant-design:delete-outlined">一键清空告警
-            </a-button>
+        <TabPane key="1" tab="地图分布">
+          <AlertMapView
+            ref="alertMapViewRef"
+            @view-image="handleCardViewImage"
+            @view-video="handleCardViewVideo"
+            @set-location="openDeviceLocationDrawer"
+            @play="handleMapDevicePlay"
+            @view="handleMapDeviceView"
+            @edit="handleMapDeviceEdit"
+          />
+        </TabPane>
+        <TabPane key="2" tab="告警事件">
+          <!-- 表格模式 -->
+          <BasicTable v-if="viewMode === 'table'" @register="registerTable">
+            <template #toolbar>
+              <AlertListToolbar
+                @toggle-view="handleToggleViewMode"
+                @clear-all="handleClearAllAlerts"
+              />
+            </template>
+            <template #bodyCell="{ column, record }">
+              <template v-if="column.key === 'device_id'">
+                <span style="cursor: pointer" @click="handleCopy(record['device_id'])"><Icon
+                  icon="tdesign:copy-filled" color="#4287FCFF"/> {{ formatDeviceId(record['device_id']) }}</span>
+              </template>
+              <template v-if="column.key === 'device_name'">
+                <span style="cursor: pointer" @click="handleCopy(record['device_name'])"><Icon
+                  icon="tdesign:copy-filled" color="#4287FCFF"/> {{ record['device_name'] }}</span>
+              </template>
+              <template v-if="column.key === 'task_type'">
+                <a-tag :color="getTaskTypeColor(record['task_type'])">
+                  {{ getTaskTypeText(record['task_type']) }}
+                </a-tag>
+              </template>
+              <template v-if="column.dataIndex === 'action'">
+                <TableAction
+                  :actions="[
+                    {
+                      icon: 'ion:image-sharp',
+                      tooltip: { title: '查看告警图片', placement: 'top' },
+                      onClick: handleViewImage.bind(null, record),
+                    },
+                    {
+                      icon: 'icon-park-outline:video',
+                      tooltip: { title: '查看告警录像', placement: 'top' },
+                      onClick: handleViewVideo.bind(null, record),
+                    },
+                  ]"
+                />
+              </template>
+            </template>
+          </BasicTable>
+
+          <!-- 卡片模式（默认） -->
+          <div v-else class="card-mode-wrapper">
+            <AlertCards
+              :api="queryAlarmList"
+              :params="params"
+              @getMethod="getMethod"
+              @viewImage="handleCardViewImage"
+              @viewVideo="handleCardViewVideo"
+            >
+              <template #header>
+                <AlertListToolbar
+                  @toggle-view="handleToggleViewMode"
+                  @clear-all="handleClearAllAlerts"
+                />
+              </template>
+            </AlertCards>
           </div>
-        </template>
-      </AlertCards>
+        </TabPane>
+      </Tabs>
     </div>
-    <!-- 图片查看弹窗 -->
+
     <ImageModal @register="registerImageModal" />
-    <!-- 视频播放弹窗 -->
     <DialogPlayer @register="registerVideoModal" />
+    <DeviceLocationDrawer @register="registerLocationDrawer" @success="handleLocationDrawerSuccess" />
   </div>
 </template>
 <script lang="ts" setup name="noticeSetting">
-import {reactive, ref, onMounted, onActivated} from 'vue';
-import {BasicTable, TableAction, useTable} from '@/components/Table';
-import {useMessage} from '@/hooks/web/useMessage';
-import {getBasicColumns, getFormConfig} from "./Data";
-import {useRouter} from "vue-router";
-import {queryAlarmList, clearAllAlerts} from "@/api/device/calculate";
-import {resolveAlertRecordVideoUrl} from '@/utils/alertRecord';
-import {Icon} from "@/components/Icon";
-import AlertCards from "@/views/alert/components/AlertCards/index.vue";
-import ImageModal from "@/views/alert/components/ImageModal/index.vue";
-import DialogPlayer from "@/components/VideoPlayer/DialogPlayer.vue";
+import { nextTick, reactive, ref, onMounted, onActivated } from 'vue';
+import { TabPane, Tabs } from 'ant-design-vue';
+import { BasicTable, TableAction, useTable } from '@/components/Table';
+import { useMessage } from '@/hooks/web/useMessage';
+import { getBasicColumns, getFormConfig } from './Data';
+import { useRouter } from 'vue-router';
+import { queryAlarmList, clearAllAlerts } from '@/api/device/calculate';
+import { resolveAlertRecordVideoUrl } from '@/utils/alertRecord';
+import { Icon } from '@/components/Icon';
+import AlertCards from '@/views/alert/components/AlertCards/index.vue';
+import AlertMapView from '@/views/alert/components/AlertMapView/index.vue';
+import AlertListToolbar from '@/views/alert/components/AlertListToolbar.vue';
+import ImageModal from '@/views/alert/components/ImageModal/index.vue';
+import DialogPlayer from '@/components/VideoPlayer/DialogPlayer.vue';
 import { useModal } from '@/components/Modal';
+import {
+  mergeAlertFetchParams,
+  normalizeAlertQueryParams,
+  snapshotAlertFilters,
+} from '@/views/alert/utils/alertQueryParams';
+import DeviceLocationDrawer from '@/views/camera/components/DeviceLocationDrawer/index.vue';
+import { canSetDeviceLocation } from '@/views/camera/utils/deviceLocation';
+import { getDeviceInfo } from '@/api/device/camera';
+import { openDeviceInDialogPlayer } from '@/views/camera/utils/devicePlay';
 
 const router = useRouter();
 const [registerImageModal, { openModal: openImageModal }] = useModal();
 const [registerVideoModal, { openModal: openVideoModal }] = useModal();
+const [registerLocationDrawer, { openModal: openLocationModal }] = useModal();
 
-defineOptions({name: 'Alarm'})
+defineOptions({ name: 'Alarm' });
+
+const ALERT_TAB_KEYS = {
+  MAP: '1',
+  EVENTS: '2',
+} as const;
+
+const ALERT_TAB_ID_SET = new Set<string>(Object.values(ALERT_TAB_KEYS));
+
+const viewMode = ref<'table' | 'card'>('card');
 
 const state = reactive({
-  isTableMode: false,
-  activeKey: '1',
+  activeKey: ALERT_TAB_KEYS.MAP,
 });
 
 const params = ref<Record<string, any>>({});
+const alertMapViewRef = ref<InstanceType<typeof AlertMapView>>();
 
 let cardListReload = () => {};
 
-/** 表格模式下保存的筛选条件（不含分页），翻页时合并 */
 const lastTableFilterParams = ref<Record<string, any>>({});
+
+function normalizeAlertRouteTab(tab: unknown): string {
+  if (tab === 'map') return ALERT_TAB_KEYS.MAP;
+  if (tab === 'events') return ALERT_TAB_KEYS.EVENTS;
+  const tabStr = String(tab);
+  if (ALERT_TAB_ID_SET.has(tabStr)) return tabStr;
+  return ALERT_TAB_KEYS.MAP;
+}
+
+async function activateMapTab() {
+  state.activeKey = ALERT_TAB_KEYS.MAP;
+  await nextTick();
+  const filters = lastTableFilterParams.value;
+  if (Object.keys(filters).length) {
+    await alertMapViewRef.value?.applyFilters?.(filters);
+  } else {
+    await alertMapViewRef.value?.init?.();
+  }
+  await alertMapViewRef.value?.resizeMap?.();
+}
+
+function handleTabClick(activeKey: string) {
+  state.activeKey = activeKey;
+  if (activeKey === ALERT_TAB_KEYS.MAP) {
+    void activateMapTab();
+  }
+}
 
 const refreshData = () => {
   const route = router.currentRoute.value;
+  const rawTab = route.query.tab ?? (route.query.view === 'map' ? ALERT_TAB_KEYS.MAP : undefined);
+  const tab = rawTab ? normalizeAlertRouteTab(rawTab) : ALERT_TAB_KEYS.MAP;
+  if (tab === ALERT_TAB_KEYS.MAP) {
+    void activateMapTab();
+    return;
+  }
+  state.activeKey = ALERT_TAB_KEYS.EVENTS;
   if (route.query.task_name) {
-    params.value = {task_name: route.query.task_name};
+    params.value = { task_name: route.query.task_name };
     setTimeout(() => {
       const form = getForm();
       if (form) {
-        form.setFieldsValue({task_name: route.query.task_name});
+        form.setFieldsValue({ task_name: route.query.task_name });
       }
       reload();
       cardListReload();
@@ -133,25 +200,19 @@ onActivated(() => {
   refreshData();
 });
 
-// 获取内部fetch方法;
 function getMethod(m: any) {
   cardListReload = m;
 }
 
-// 切换视图
-function handleClickSwap() {
-  state.isTableMode = !state.isTableMode;
+function handleToggleViewMode() {
+  viewMode.value = viewMode.value === 'card' ? 'table' : 'card';
+  if (viewMode.value === 'table') {
+    reload();
+  } else {
+    cardListReload();
+  }
 }
 
-// 表格刷新
-function handleSuccess() {
-  reload({
-    page: 0,
-  });
-  cardListReload();
-}
-
-// 卡片视图事件处理
 function handleCardViewImage(record) {
   handleViewImage(record);
 }
@@ -160,7 +221,36 @@ function handleCardViewVideo(record) {
   handleViewVideo(record);
 }
 
-const {createMessage, createConfirm} = useMessage();
+function openDeviceLocationDrawer(record: { id?: string; name?: string; device_kind?: string }) {
+  if (!canSetDeviceLocation(record)) return;
+  openLocationModal(true, { deviceId: record.id, record });
+}
+
+function handleLocationDrawerSuccess() {
+  alertMapViewRef.value?.refresh?.();
+}
+
+async function handleMapDevicePlay(record: { id?: string }) {
+  if (!record?.id) return;
+  try {
+    const info = await getDeviceInfo(record.id);
+    openDeviceInDialogPlayer(openVideoModal, info);
+  } catch {
+    createMessage.error('加载设备信息失败');
+  }
+}
+
+function handleMapDeviceView(record: { id?: string }) {
+  if (!record?.id) return;
+  router.push({ path: '/camera', query: { tab: '3', highlight: record.id } });
+}
+
+function handleMapDeviceEdit(record: { id?: string }) {
+  if (!record?.id) return;
+  router.push({ path: '/camera', query: { tab: '3', edit: record.id } });
+}
+
+const { createMessage, createConfirm } = useMessage();
 const [
   registerTable,
   {
@@ -183,74 +273,17 @@ const [
     sizeField: 'pageSize',
   },
   beforeFetch: (p) => {
-    const timeRangeKey = '[begin_datetime, end_datetime]';
-    if (p[timeRangeKey] && Array.isArray(p[timeRangeKey])) {
-      const [begin, end] = p[timeRangeKey];
-      if (begin && typeof begin.format === 'function') {
-        p.begin_datetime = begin.format('YYYY-MM-DD HH:mm:ss');
-      } else if (begin) {
-        p.begin_datetime = begin;
-      }
-      if (end && typeof end.format === 'function') {
-        p.end_datetime = end.format('YYYY-MM-DD HH:mm:ss');
-      } else if (end) {
-        p.end_datetime = end;
-      }
-      delete p[timeRangeKey];
-    }
-    if (p.begin_datetime && typeof p.begin_datetime === 'object' && typeof (p.begin_datetime as any).format === 'function') {
-      p.begin_datetime = (p.begin_datetime as any).format('YYYY-MM-DD HH:mm:ss');
-    }
-    if (p.end_datetime && typeof p.end_datetime === 'object' && typeof (p.end_datetime as any).format === 'function') {
-      p.end_datetime = (p.end_datetime as any).format('YYYY-MM-DD HH:mm:ss');
-    }
-    if (p.task_name) {
-      p.task_name = String(p.task_name).trim();
-      if (!p.task_name) delete p.task_name;
-    }
-    if (Array.isArray(p.business_tags)) {
-      const tags = p.business_tags.map((t) => String(t).trim()).filter(Boolean);
-      if (tags.length) {
-        p.business_tags = tags.join(',');
-      } else {
-        delete p.business_tags;
-      }
-    }
     const route = router.currentRoute.value;
-    if (route.query.task_name && !p.task_name) {
-      p.task_name = String(route.query.task_name).trim();
-    }
-    if (p.begin_datetime === null || p.begin_datetime === undefined || p.begin_datetime === '') {
-      delete p.begin_datetime;
-    }
-    if (p.end_datetime === null || p.end_datetime === undefined || p.end_datetime === '') {
-      delete p.end_datetime;
-    }
-    const hasFilterParams = !!(
-      p.begin_datetime ||
-      p.end_datetime ||
-      p.task_name ||
-      p.device_id ||
-      p.object ||
-      p.event ||
-      (p.business_tags && (Array.isArray(p.business_tags) ? p.business_tags.length : String(p.business_tags).trim()))
+    const merged = mergeAlertFetchParams(
+      p as Record<string, unknown>,
+      lastTableFilterParams.value,
     );
-    if (!hasFilterParams && Object.keys(lastTableFilterParams.value).length > 0) {
-      Object.assign(p, lastTableFilterParams.value);
-    } else if (hasFilterParams) {
-      const filterParams: Record<string, any> = {};
-      if (p.begin_datetime) filterParams.begin_datetime = p.begin_datetime;
-      if (p.end_datetime) filterParams.end_datetime = p.end_datetime;
-      if (p.task_name) filterParams.task_name = p.task_name;
-      if (p.device_id !== undefined && p.device_id !== '') filterParams.device_id = p.device_id;
-      if (p.object !== undefined && p.object !== null && p.object !== '') filterParams.object = p.object;
-      if (p.event !== undefined && p.event !== null && p.event !== '') filterParams.event = p.event;
-      if (p.business_tags && Array.isArray(p.business_tags) && p.business_tags.length) {
-        filterParams.business_tags = p.business_tags;
-      }
-      lastTableFilterParams.value = filterParams;
-    }
-    return p;
+    const normalized = normalizeAlertQueryParams(
+      merged,
+      route.query.task_name as string | undefined,
+    );
+    lastTableFilterParams.value = snapshotAlertFilters(normalized);
+    return normalized;
   },
   rowKey: 'id',
 });
@@ -266,7 +299,6 @@ const handleViewImage = (record: Record<string, any>) => {
   });
 };
 
-// 防重复提示：记录最近提示的时间和内容
 let lastVideoErrorTime = 0;
 let lastVideoErrorMsg = '';
 
@@ -302,10 +334,8 @@ const handleViewVideo = async (record) => {
   }
 };
 
-// 防重复提示函数：3秒内相同错误只提示一次
 function showVideoErrorOnce(message: string) {
   const now = Date.now();
-  // 如果3秒内提示过相同内容，则不再提示
   if (now - lastVideoErrorTime < 3000 && lastVideoErrorMsg === message) {
     return;
   }
@@ -314,17 +344,14 @@ function showVideoErrorOnce(message: string) {
   createMessage.warn(message);
 }
 
-// 格式化设备ID显示（超过8个字符省略）
 function formatDeviceId(deviceId: string | null | undefined): string {
   if (!deviceId) return '-';
   if (deviceId.length <= 8) return deviceId;
   return deviceId.substring(0, 8) + '...';
 }
 
-// 获取任务类型文本
 function getTaskTypeText(taskType: string | null | undefined): string {
   if (!taskType) return '实时';
-  // 兼容 'snap' 和 'snapshot' 两种值
   if (taskType === 'snap' || taskType === 'snapshot') {
     return '抓拍';
   } else if (taskType === 'realtime') {
@@ -333,10 +360,8 @@ function getTaskTypeText(taskType: string | null | undefined): string {
   return taskType;
 }
 
-// 获取任务类型标签颜色
 function getTaskTypeColor(taskType: string | null | undefined): string {
   if (!taskType) return 'blue';
-  // 兼容 'snap' 和 'snapshot' 两种值
   if (taskType === 'snap' || taskType === 'snapshot') {
     return 'green';
   } else if (taskType === 'realtime') {
@@ -349,7 +374,6 @@ async function handleCopy(record: object) {
   if (navigator.clipboard) {
     await navigator.clipboard.writeText(record);
   } else {
-    // 降级方案
     const textarea = document.createElement('textarea');
     textarea.value = record;
     document.body.appendChild(textarea);
@@ -360,7 +384,6 @@ async function handleCopy(record: object) {
   createMessage.success('复制成功');
 }
 
-// 一键清空所有告警
 const handleClearAllAlerts = () => {
   createConfirm({
     title: '清空告警',
@@ -372,6 +395,7 @@ const handleClearAllAlerts = () => {
         createMessage.success('清空告警成功');
         reload();
         cardListReload();
+        alertMapViewRef.value?.refresh?.();
       } catch (error: any) {
         const errorMsg =
           error?.response?.data?.msg ||
@@ -384,3 +408,25 @@ const handleClearAllAlerts = () => {
   });
 };
 </script>
+
+<style scoped lang="less">
+.alert-page {
+  min-height: 0;
+}
+
+.alert-tab {
+  padding: 16px 19px 0 15px;
+
+  :deep(.ant-tabs-nav) {
+    padding: 5px 0 0 25px;
+  }
+
+  :deep(.ant-tabs) {
+    background-color: #ffffff;
+  }
+}
+
+.card-mode-wrapper {
+  min-height: 0;
+}
+</style>

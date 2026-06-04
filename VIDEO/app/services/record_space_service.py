@@ -13,8 +13,11 @@ from minio.error import S3Error
 from sqlalchemy.exc import IntegrityError
 
 from models import db, RecordSpace
+from app.utils.minio_bucket_policy import ensure_bucket_public_read_write_policy
 
 logger = logging.getLogger(__name__)
+
+RECORD_SPACE_BUCKET = "record-space"
 
 
 def get_minio_client():
@@ -64,14 +67,14 @@ def create_record_space(space_name, save_mode=0, save_time=0, description=None, 
         
         # 生成唯一编号
         space_code = f"RECORD_{uuid.uuid4().hex[:8].upper()}"
-        # 统一使用 record-space bucket
-        bucket_name = "record-space"
+        bucket_name = RECORD_SPACE_BUCKET
         
-        # 确保 record-space bucket 存在
+        # 确保 record-space bucket 存在且具备公开策略（否则 /api/v1/buckets/.../download 返回 500）
         minio_client = get_minio_client()
         if not minio_client.bucket_exists(bucket_name):
             minio_client.make_bucket(bucket_name)
             logger.info(f"创建MinIO bucket: {bucket_name}")
+        ensure_bucket_public_read_write_policy(minio_client, bucket_name)
         
         # 现在不再使用 space_code 作为文件夹层级，直接使用 device_id
         # 如果提供了设备ID，检查该设备是否已有文件夹
@@ -403,12 +406,13 @@ def sync_spaces_to_minio():
     """同步所有监控录像空间到Minio，创建不存在的目录"""
     try:
         minio_client = get_minio_client()
-        bucket_name = "record-space"
+        bucket_name = RECORD_SPACE_BUCKET
         
-        # 确保bucket存在
+        # 确保 bucket 存在且具备公开策略
         if not minio_client.bucket_exists(bucket_name):
             minio_client.make_bucket(bucket_name)
             logger.info(f"创建MinIO bucket: {bucket_name}")
+        ensure_bucket_public_read_write_policy(minio_client, bucket_name)
         
         # 获取所有监控录像空间
         spaces = RecordSpace.query.all()

@@ -190,8 +190,17 @@ export const registerDeviceByOnvif = (data: {
   return commonApi('post', `${CAMERA_PREFIX}/register/device/onvif`, data);
 };
 
-export const getDeviceInfo = (device_id: string) => {
-  return commonApi('get', `${CAMERA_PREFIX}/device/${device_id}`);
+function cameraDevicePath(device_id: string) {
+  return `${CAMERA_PREFIX}/device/${encodeURIComponent(device_id)}`;
+}
+
+export const getDeviceInfo = (device_id: string, params?: { name?: string }) => {
+  return commonApi('get', cameraDevicePath(device_id), params || {});
+};
+
+/** 获取设备坐标（地图选点弹窗；国标虚拟通道不存在时后端按需入库） */
+export const getDeviceLocation = (device_id: string, params?: { name?: string }) => {
+  return commonApi('get', `${cameraDevicePath(device_id)}/location`, params || {}, {}, false);
 };
 
 export const updateDevice = (device_id: string, data: {
@@ -223,7 +232,7 @@ export const updateDevice = (device_id: string, data: {
   latitude?: number | null;
   altitude?: number | null;
   address?: string | null;
-  location_source?: string | null;
+  heading?: number | null;
 }) => {
   return commonApi('put', `${CAMERA_PREFIX}/device/${device_id}`, data);
 };
@@ -238,6 +247,7 @@ export interface DeviceLocationInfo {
   latitude?: number | null;
   altitude?: number | null;
   address?: string | null;
+  heading?: number | null;
   location_source?: string | null;
   location_updated_at?: string | null;
   has_location?: boolean;
@@ -253,6 +263,87 @@ export const getDeviceLocations = (params?: {
     ...(params?.directory_id != null ? { directory_id: params.directory_id } : {}),
     ...(params?.has_location === false ? { has_location: 'false' } : {}),
   });
+};
+
+export interface BatchLocationItem {
+  device_id: string;
+  longitude: number;
+  latitude: number;
+  address?: string | null;
+  altitude?: number | null;
+  heading?: number | null;
+}
+
+export interface BatchLocationResult {
+  updated: number;
+  total: number;
+  errors: Array<{ device_id?: string | null; msg: string; index?: number | null }>;
+}
+
+/** 批量更新摄像头坐标 */
+export const batchUpdateDeviceLocations = (items: BatchLocationItem[]) => {
+  return commonApi('post', `${CAMERA_PREFIX}/locations/batch`, { items });
+};
+
+export interface UpdateDeviceLocationPayload {
+  longitude?: number | null;
+  latitude?: number | null;
+  altitude?: number | null;
+  address?: string | null;
+  heading?: number | null;
+  location_source?: string | null;
+  /** 国标虚拟设备首次入库时的展示名称 */
+  name?: string | null;
+}
+
+/** 更新单个摄像头坐标（地图选点抽屉） */
+export const updateDeviceLocation = (
+  device_id: string,
+  data: UpdateDeviceLocationPayload,
+) => {
+  return commonApi('put', `${cameraDevicePath(device_id)}/location`, data, {}, false);
+};
+
+export interface DeviceTrackSessionInfo {
+  id: number;
+  device_id: string;
+  title?: string | null;
+  started_at?: string | null;
+  ended_at?: string | null;
+  point_count?: number;
+  distance_m?: number | null;
+  source?: string;
+}
+
+export interface DeviceTrackPointInfo {
+  id: number;
+  device_id: string;
+  session_id?: number | null;
+  recorded_at: string;
+  longitude: number;
+  latitude: number;
+  altitude?: number | null;
+  speed?: number | null;
+  direction?: number | null;
+}
+
+export const getDeviceTrackSessions = (params?: {
+  device_id?: string;
+  begin_datetime?: string;
+  end_datetime?: string;
+  limit?: number;
+}) => {
+  return commonApi('get', `${CAMERA_PREFIX}/tracks/sessions`, params);
+};
+
+export const getDeviceTrackPoints = (params: {
+  session_id?: number | string;
+  device_id?: string;
+  begin_datetime?: string;
+  end_datetime?: string;
+  limit?: number;
+}) => {
+  return commonApi('get', `${CAMERA_PREFIX}/tracks/points`, params);
 };
 
 export const deleteDevice = (device_id: string) => {
@@ -513,6 +604,7 @@ export interface DeviceInfo {
   latitude?: number | null;
   altitude?: number | null;
   address?: string | null;
+  heading?: number | null;
   location_source?: string | null;
   location_updated_at?: string | null;
   has_location?: boolean;

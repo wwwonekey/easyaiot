@@ -140,6 +140,55 @@ def _virtual_device_id(sip_device_id: str, channel_id: str) -> str:
     return f'gb28181_{sip_device_id}_{channel_id}'
 
 
+def parse_gb28181_virtual_device_id(device_id: str) -> Optional[Tuple[str, str]]:
+    """解析 device 表中国标通道虚拟 ID：gb28181_{sipDeviceId}_{channelId}。"""
+    device_id = (device_id or '').strip()
+    prefix = 'gb28181_'
+    if not device_id.startswith(prefix):
+        return None
+    rest = device_id[len(prefix):]
+    if not rest or '_' not in rest:
+        return None
+    sip_device_id, channel_id = rest.rsplit('_', 1)
+    sip_device_id = sip_device_id.strip()
+    channel_id = channel_id.strip()
+    if not sip_device_id or not channel_id:
+        return None
+    return sip_device_id, channel_id
+
+
+def ensure_gb28181_virtual_device(
+    device_id: str,
+    *,
+    name: str | None = None,
+    location: dict | None = None,
+) -> Device:
+    """
+    国标通道在设置坐标/查询详情时按需写入 device 表，避免未执行目录同步时找不到设备。
+    """
+    parsed = parse_gb28181_virtual_device_id(device_id)
+    if not parsed:
+        raise ValueError(f'无效的国标虚拟设备 ID: {device_id}')
+    sip_device_id, channel_id = parsed
+    existing = Device.query.get(device_id)
+    if existing:
+        return existing
+
+    default_dir_id = get_or_create_default_directory().id
+    display_name = (name or channel_id or device_id).strip()
+    _upsert_gb_device(
+        sip_device_id,
+        channel_id,
+        display_name,
+        default_dir_id,
+        location=location or {},
+    )
+    device = Device.query.get(device_id)
+    if not device:
+        raise ValueError(f'创建国标设备 {device_id} 失败')
+    return device
+
+
 def _extract_channel_location(item: dict) -> dict:
     """从 WVP 通道数据提取位置信息（国标 Catalog 字段）。"""
     lng = item.get('longitude') or item.get('gbLongitude')

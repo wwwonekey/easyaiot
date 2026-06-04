@@ -31,12 +31,11 @@
             <ListItem class="nvr-channel-list-item">
               <NvrChannelCard
                 :item="item"
-                :stream-status="getStreamStatus(item.id)"
                 @view="emit('view', $event)"
                 @edit="emit('edit', $event)"
+                @set-location="emit('setLocation', $event)"
                 @play="emit('play', $event)"
                 @playAI="emit('playAI', $event)"
-                @toggleStream="emit('toggleStream', $event)"
                 @delete="emit('delete', $event)"
               />
             </ListItem>
@@ -59,17 +58,15 @@ const ListItem = List.Item;
 const props = defineProps<{
   nvrId: number;
   title?: string;
-  /** 与设备列表页共用的 RTSP 转发状态表 */
-  deviceStreamStatuses?: Record<string, string>;
 }>();
 
 const emit = defineEmits<{
   back: [];
   view: [device: DeviceInfo];
   edit: [device: DeviceInfo];
+  setLocation: [device: DeviceInfo];
   play: [device: DeviceInfo];
   playAI: [device: DeviceInfo];
-  toggleStream: [device: DeviceInfo];
   delete: [device: DeviceInfo];
 }>();
 
@@ -110,10 +107,6 @@ function mapCameras(data: NvrInfo | null) {
     nvr_channel: c.nvr_channel,
     channel_online: c.online,
   })) as DeviceInfo[];
-}
-
-function getStreamStatus(deviceId: string) {
-  return props.deviceStreamStatuses?.[deviceId] || 'unknown';
 }
 
 async function load() {

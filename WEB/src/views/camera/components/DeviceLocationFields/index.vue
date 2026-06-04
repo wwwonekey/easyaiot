@@ -62,6 +62,34 @@
             <Input :value="summaryText" disabled placeholder="填写经纬度后自动生成" />
           </FormItem>
         </Col>
+        <Col :span="12">
+          <FormItem label="朝向(°)" name="heading" :rules="headingRules">
+            <InputNumber
+              v-model:value="localHeading"
+              :disabled="disabled"
+              :min="0"
+              :max="360"
+              :precision="1"
+              :step="1"
+              placeholder="0=正北，顺时针"
+              style="width: 100%"
+              @change="emitChange"
+            />
+          </FormItem>
+        </Col>
+        <Col :span="12">
+          <FormItem label="朝向预览">
+            <div class="heading-preview">
+              <div
+                class="heading-preview__compass"
+                :style="{ transform: `rotate(${localHeading ?? 0}deg)` }"
+              >
+                <span class="heading-preview__arrow" />
+              </div>
+              <span class="heading-preview__text">{{ headingSummaryText || '未设置' }}</span>
+            </div>
+          </FormItem>
+        </Col>
         <Col :span="24">
           <FormItem label="安装地址" name="address">
             <Input.TextArea
@@ -75,7 +103,7 @@
         </Col>
       </Row>
       <div v-if="!disabled" class="location-tip">
-        坐标采用 WGS84（GPS）标准。国标设备同步时会自动带入 Catalog 中的经纬度；手动修改后将不再被同步覆盖。
+        坐标采用 WGS84（GPS）标准；朝向以正北为 0°，顺时针增加（90°=正东）。枪机安装朝向将显示在地图上。
       </div>
     </template>
   </div>
@@ -85,10 +113,12 @@
 import { computed, ref, watch } from 'vue';
 import { Col, Divider, FormItem, Input, InputNumber, Row } from 'ant-design-vue';
 import {
+  formatHeadingSummary,
   formatLocationSummary,
   hasDeviceLocation,
   LOCATION_SOURCE_LABEL,
   validateAltitude,
+  validateHeading,
   validateLatitude,
   validateLocationPair,
   validateLongitude,
@@ -102,6 +132,7 @@ const props = withDefaults(
     latitude?: number | null;
     altitude?: number | null;
     address?: string | null;
+    heading?: number | null;
     locationSource?: string | null;
     locationUpdatedAt?: string | null;
     disabled?: boolean;
@@ -112,6 +143,7 @@ const props = withDefaults(
     latitude: null,
     altitude: null,
     address: null,
+    heading: null,
     locationSource: null,
     locationUpdatedAt: null,
     disabled: false,
@@ -124,26 +156,30 @@ const emit = defineEmits<{
   'update:latitude': [value: number | null];
   'update:altitude': [value: number | null];
   'update:address': [value: string | null];
+  'update:heading': [value: number | null];
 }>();
 
 const localLongitude = ref<number | null>(props.longitude ?? null);
 const localLatitude = ref<number | null>(props.latitude ?? null);
 const localAltitude = ref<number | null>(props.altitude ?? null);
 const localAddress = ref<string>(props.address ?? '');
+const localHeading = ref<number | null>(props.heading ?? null);
 
 watch(
-  () => [props.longitude, props.latitude, props.altitude, props.address],
+  () => [props.longitude, props.latitude, props.altitude, props.address, props.heading],
   () => {
     localLongitude.value = props.longitude ?? null;
     localLatitude.value = props.latitude ?? null;
     localAltitude.value = props.altitude ?? null;
     localAddress.value = props.address ?? '';
+    localHeading.value = props.heading ?? null;
   },
 );
 
 const hasAnyValue = computed(() =>
   hasDeviceLocation({ longitude: localLongitude.value, latitude: localLatitude.value })
     || localAltitude.value != null
+    || localHeading.value != null
     || !!localAddress.value?.trim(),
 );
 
@@ -151,8 +187,11 @@ const summaryText = computed(() =>
   formatLocationSummary({
     longitude: localLongitude.value,
     latitude: localLatitude.value,
+    heading: localHeading.value,
   }),
 );
+
+const headingSummaryText = computed(() => formatHeadingSummary(localHeading.value));
 
 const locationSourceLabel = computed(() => {
   const src = props.locationSource;
@@ -179,12 +218,14 @@ const latitudeRules = [
 ];
 
 const altitudeRules = [{ validator: validateAltitude, trigger: 'change' }];
+const headingRules = [{ validator: validateHeading, trigger: 'change' }];
 
 function emitChange() {
   emit('update:longitude', localLongitude.value);
   emit('update:latitude', localLatitude.value);
   emit('update:altitude', localAltitude.value);
   emit('update:address', localAddress.value?.trim() || null);
+  emit('update:heading', localHeading.value);
 }
 </script>
 
@@ -214,6 +255,40 @@ function emitChange() {
     font-size: 12px;
     line-height: 1.5;
     color: rgba(0, 0, 0, 0.45);
+  }
+
+  .heading-preview {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 32px;
+  }
+
+  .heading-preview__compass {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 1px solid #d9d9d9;
+    background: #fafafa;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.2s;
+  }
+
+  .heading-preview__arrow {
+    display: block;
+    width: 0;
+    height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-bottom: 12px solid #4287fc;
+    transform: translateY(-2px);
+  }
+
+  .heading-preview__text {
+    font-size: 12px;
+    color: rgba(0, 0, 0, 0.65);
   }
 }
 </style>

@@ -56,21 +56,8 @@
           <div class="btn" title="编辑" @click="emit('edit', item)">
             <Icon icon="ant-design:edit-filled" :size="15" color="#3B82F6" />
           </div>
-          <div
-            v-if="supportsRtspForward(item)"
-            class="btn"
-            :title="streamStatus === 'running' ? '停止RTSP转发' : '启用RTSP转发'"
-            @click="emit('toggleStream', item)"
-          >
-            <Icon
-              :icon="
-                streamStatus === 'running'
-                  ? 'ant-design:pause-circle-outlined'
-                  : 'ant-design:swap-outline'
-              "
-              :size="15"
-              color="#3B82F6"
-            />
+          <div class="btn" title="设置坐标" @click="emit('setLocation', item)">
+            <Icon icon="ant-design:environment-outlined" :size="15" color="#3B82F6" />
           </div>
           <Popconfirm
             title="是否确认删除？"
@@ -97,7 +84,7 @@ import { Popconfirm } from 'ant-design-vue';
 import { Icon } from '@/components/Icon';
 import type { DeviceInfo } from '@/api/device/camera';
 import { formatCameraDeviceLabel } from '@/views/camera/utils/deviceLabel';
-import { hasDirectPlayStream, supportsRtspForward } from '@/views/camera/utils/devicePlay';
+import { hasDirectPlayStream } from '@/views/camera/utils/devicePlay';
 import { copyText } from '@/utils/copyTextToClipboard';
 import { useMessage } from '@/hooks/web/useMessage';
 import HAIKANG_IMAGE from '@/assets/images/video/haikang.png';
@@ -111,8 +98,6 @@ const props = defineProps<{
     rtsp_url?: string;
     rtsp_direct?: string;
   };
-  /** 与直连设备卡片一致的 RTSP 转发状态 */
-  streamStatus?: string;
 }>();
 
 const { createMessage } = useMessage();
@@ -120,13 +105,11 @@ const { createMessage } = useMessage();
 const emit = defineEmits<{
   view: [device: DeviceInfo];
   edit: [device: DeviceInfo];
+  setLocation: [device: DeviceInfo];
   play: [device: DeviceInfo];
   playAI: [device: DeviceInfo];
-  toggleStream: [device: DeviceInfo];
   delete: [device: DeviceInfo];
 }>();
-
-const streamStatus = computed(() => props.streamStatus || 'unknown');
 
 const online = computed(() => props.item.online ?? props.item.channel_online);
 
@@ -347,6 +330,12 @@ const deviceImage = computed(() => {
           display: flex;
           align-items: center;
           justify-content: center;
+          color: #87ceeb;
+          transition: color 0.3s;
+        }
+
+        &:hover :deep(.anticon) {
+          color: #5ba3f5;
         }
       }
     }
@@ -354,7 +343,7 @@ const deviceImage = computed(() => {
 
   .channel-img {
     position: absolute;
-    right: 16px;
+    right: 6px;
     top: 0;
 
     img {

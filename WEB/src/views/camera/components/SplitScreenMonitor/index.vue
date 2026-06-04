@@ -1,21 +1,26 @@
 <template>
   <div class="split-screen-monitor">
     <div class="mode-toolbar">
-      <a-radio-group
+      <RadioGroup
         v-model:value="viewMode"
         button-style="solid"
         size="middle"
+        class="mode-radio-group"
         @change="handleModeChange"
       >
-        <a-radio-button value="monitor">
-          <Icon icon="ic:sharp-grid-view" />
-          分屏监控
-        </a-radio-button>
-        <a-radio-button value="config">
-          <Icon icon="ant-design:folder-outlined" />
-          设备目录
-        </a-radio-button>
-      </a-radio-group>
+        <RadioButton value="monitor">
+          <span class="mode-radio-item">
+            <Icon icon="ic:sharp-grid-view" />
+            分屏监控
+          </span>
+        </RadioButton>
+        <RadioButton value="config">
+          <span class="mode-radio-item">
+            <Icon icon="ant-design:folder-outlined" />
+            设备目录
+          </span>
+        </RadioButton>
+      </RadioGroup>
       <span v-if="viewMode === 'config'" class="mode-hint">管理设备目录并关联摄像头，切换至「分屏监控」即可按目录选点播放</span>
       <span v-else class="mode-hint">从左侧设备目录选择摄像头，添加到右侧多分屏窗口</span>
     </div>
@@ -34,7 +39,7 @@
 
 <script lang="ts" setup>
 import { ref, watch } from 'vue';
-import { RadioGroup as ARadioGroup, RadioButton as ARadioButton } from 'ant-design-vue';
+import { RadioButton, RadioGroup } from 'ant-design-vue';
 import { Icon } from '@/components/Icon';
 import DirectoryManage from '../DirectoryManage/index.vue';
 import MonitorPanel from './MonitorPanel.vue';
@@ -55,15 +60,14 @@ const emit = defineEmits<{
 }>();
 
 const viewMode = ref<'config' | 'monitor'>(props.initialMode);
-/** 懒挂载：首次进入对应 Tab 再创建子组件，之后 v-show 保留状态与缓存 */
 const directoryMounted = ref(props.initialMode === 'config');
-const monitorMounted = ref(props.initialMode !== 'config');
+const monitorMounted = ref(props.initialMode === 'monitor');
 const directoryManageRef = ref<InstanceType<typeof DirectoryManage>>();
 const monitorPanelRef = ref<InstanceType<typeof MonitorPanel>>();
 
 watch(viewMode, (mode) => {
   if (mode === 'config') directoryMounted.value = true;
-  else monitorMounted.value = true;
+  else if (mode === 'monitor') monitorMounted.value = true;
 });
 
 watch(
@@ -96,7 +100,6 @@ function forceRefresh() {
 
 function setMode(mode: 'config' | 'monitor') {
   viewMode.value = mode;
-  handleModeChange();
 }
 
 defineExpose({ refresh, softRefresh: refresh, forceRefresh, setMode });
@@ -111,6 +114,11 @@ defineExpose({ refresh, softRefresh: refresh, forceRefresh, setMode });
   padding-bottom: 4px;
   box-sizing: border-box;
   overflow: hidden;
+
+  > :not(.mode-toolbar) {
+    flex: 1;
+    min-height: 0;
+  }
 
   :deep(.split-screen-container) {
     flex: 1;
@@ -128,7 +136,15 @@ defineExpose({ refresh, softRefresh: refresh, forceRefresh, setMode });
   background: #fff;
   border-bottom: 1px solid #f0f0f0;
 
-  :deep(.ant-radio-button-wrapper) {
+  .mode-radio-group {
+    :deep(.ant-radio-button-wrapper) {
+      height: auto;
+      line-height: 1;
+      padding: 6px 14px;
+    }
+  }
+
+  .mode-radio-item {
     display: inline-flex;
     align-items: center;
     gap: 6px;

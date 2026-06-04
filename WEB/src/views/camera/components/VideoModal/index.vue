@@ -225,16 +225,11 @@
                 v-model:nvr="modelRef.nvr"
               />
             </Col>
-            <Col :span="24" v-if="state.isEdit || state.isView">
-              <DeviceLocationFields
-                v-model:longitude="modelRef.longitude"
-                v-model:latitude="modelRef.latitude"
-                v-model:altitude="modelRef.altitude"
-                v-model:address="modelRef.address"
-                :location-source="modelRef.location_source"
-                :location-updated-at="modelRef.location_updated_at"
-                :disabled="state.isView"
-              />
+            <Col v-if="state.isView" :span="24">
+              <FormItem label="地图坐标">
+                <Input :value="locationSummaryText" disabled placeholder="未设置" />
+                <div class="location-hint">修改坐标请在设备列表中点击「设置坐标」</div>
+              </FormItem>
             </Col>
           </Row>
         </Form>
@@ -244,12 +239,13 @@
 </template>
 <script lang="ts" setup>
 import {computed, nextTick, reactive, ref} from 'vue';
+import { formatLocationSummary } from '@/views/camera/utils/deviceLocation';
 import { isNvrChannelDevice } from '@/views/camera/utils/deviceLabel';
 import {BasicModal, useModal, useModalInner} from '@/components/Modal';
 import {BasicTable, useTable} from '@/components/Table';
 import VideoRegisterModal from '../VideoRegisterModal/index.vue';
 import NvrMountFields from '../NvrMountFields/index.vue';
-import DeviceLocationFields from '../DeviceLocationFields/index.vue';
+import { Button } from '@/components/Button';
 import {Col, Form, FormItem, Input, Row, Select, Spin,} from 'ant-design-vue';
 import {CopyOutlined} from '@ant-design/icons-vue';
 import {useMessage} from '@/hooks/web/useMessage';
@@ -320,12 +316,14 @@ const modelRef = reactive({
   nvr_label: '',
   longitude: null as number | null,
   latitude: null as number | null,
-  altitude: null as number | null,
-  address: '',
-  location_source: null as string | null,
-  location_updated_at: null as string | null,
 });
 
+const locationSummaryText = computed(() =>
+  formatLocationSummary({
+    longitude: modelRef.longitude,
+    latitude: modelRef.latitude,
+  }),
+);
 
 /** NVR 下挂载的通道设备不可改挂其他 NVR */
 const isNvrChannel = computed(() =>
@@ -357,6 +355,18 @@ function stripReadOnlyFromPayload(data: Record<string, unknown>) {
   delete data.location_updated_at;
   delete data.has_location;
   delete data.nvr_label;
+}
+
+/** 坐标仅在「设置坐标」抽屉中维护，编辑设备时不通过本表单提交 */
+function stripLocationFromPayload(data: Record<string, unknown>) {
+  delete data.longitude;
+  delete data.latitude;
+  delete data.altitude;
+  delete data.address;
+  delete data.heading;
+  delete data.location_source;
+  delete data.location_updated_at;
+  delete data.has_location;
 }
 
 const [registerVideoRegisterModal, {openModal: openVideoRegisterModal}] = useModal();
@@ -850,6 +860,7 @@ function handleOk() {
           stripNvrMountFromPayload(updateData);
         }
         stripReadOnlyFromPayload(updateData);
+        stripLocationFromPayload(updateData);
         await updateDevice(modelRef.id, updateData);
       } else if (state.type === 'camera') {
         // 摄像头处理
@@ -867,6 +878,7 @@ function handleOk() {
             stripNvrMountFromPayload(updateData);
           }
           stripReadOnlyFromPayload(updateData);
+          stripLocationFromPayload(updateData);
           await updateDevice(modelRef.id, updateData);
         } else {
           const response = await registerDevice(modelRef);
@@ -912,6 +924,7 @@ function handleOk() {
             stripNvrMountFromPayload(updateData);
           }
           stripReadOnlyFromPayload(updateData);
+          stripLocationFromPayload(updateData);
           await updateDevice(modelRef.id, updateData);
           
           // 检查并确保推流转发任务存在
@@ -1002,6 +1015,13 @@ function handleOk() {
       color: #096dd9;
       transform: scale(0.95);
     }
+  }
+
+  .location-hint {
+    margin-top: 4px;
+    font-size: 12px;
+    color: rgba(0, 0, 0, 0.45);
+    line-height: 1.5;
   }
 }
 </style>

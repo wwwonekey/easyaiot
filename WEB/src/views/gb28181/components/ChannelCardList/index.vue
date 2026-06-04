@@ -22,33 +22,34 @@
           <template #renderItem="{ item }">
             <ListItem
               class="product-item normal">
+              <div class="status">
+                在线
+              </div>
               <div class="product-info">
-                <div class="status">
-                  在线
-                </div>
                 <div class="title o2">{{ item.name }}</div>
                 <div class="props">
-                  <div class="prop">
-                    <div class="label">通道编码</div>
-                    <div class="value">{{
-                        item.channelId ?? item.deviceId ?? '-'
-                      }}
-                    </div>
-                  </div>
-                  <div class="flex" style="justify-content: space-between;">
-                    <div class="prop">
-                      <div class="label">设备类型</div>
-                      <div class="value">{{ item.ptzTypeText ?? '-' }}</div>
-                    </div>
+                  <div class="props-row">
                     <div class="prop">
                       <div class="label">厂商名称</div>
                       <div class="value">
-                        {{ (item.manufacturer ?? item.manufacture ?? '').toString().toUpperCase() || '-' }}
+                        {{ formatChannelManufacturer(item) }}
+                      </div>
+                    </div>
+                    <div class="prop">
+                      <div class="label">设备类型</div>
+                      <div class="value">
+                        {{ formatGbChannelDeviceType(item) }}
                       </div>
                     </div>
                   </div>
+                  <div class="prop prop-channel-id">
+                    <div class="label">通道编码</div>
+                    <div class="value">{{
+                      item.channelId ?? item.deviceId ?? '-'
+                    }}</div>
+                  </div>
                 </div>
-                <div class="btns">
+                <div class="btns" :class="{ 'btns--embedded': showLocationAction }">
                   <Popconfirm
                     title="是否确认删除？"
                     ok-text="是"
@@ -66,8 +67,7 @@
                       src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAABDpJREFUWEetV0FyWkcQff0VK1VKFningFOFbgAnAJ3A+ATGVQHJ2ZicAHQCS7sEVGVyAqETgE4gfAKziABXFmZjWQViXqpHf74+X4MEOOyomd/zpvu91z2CDX6pGlM716gBeA0gG4boQ9AXojcPcDH+UwarhJZVNsX3vDhkkXOcUZB64tsBBD0Q59c76E2OZeLbvxaATIU5Ci41EIkegca4JRf6X9cMUBBBEUQRDwF2BOhcNeXvOJC1AKSr/KQpNwaN8akcPZaB3bcsyC1yCFASBRT+LPAtvHElWhnAr1WW5sAZgcGoKXvrlG63zCyeoSiCutxxZnA9RX7SlsnKANIH/ACiTKI2asnJOgDcXgUi2+haEAaN4akcrQQgZL3WPmum2Bu3V2O4D+TuIYuBQRfE5HqGvaUAlO3G2LQVGNZwk/T7QPxywK7ywhjsLwDYPWRWiHeBQdkrM6I9bMmbTdIf/8aVU4ByBCDzG2sM8D5iK6BG0hFBT4gGgdzcoPT5VM7/BwBnIEoazwJIV9kAULeBibYB2k7f2TJT02180aXrKZ4rc78bQCjnGZEXTXtgoPqGAcrjhFGEXOiqfkct2f/ew6PziMmwJc/F1UNv7qtvpsr3BGoEjkdN+SOS1CGzW3NcUjCgoLc1x/k/p9J7CmCmQuXXBwKdUVNeiXM3Tce/LeknA2SqvNT6G6LoyuKsF0A3SVZtRmq5BC6uPPGSfqIAqAGHTXkgyXj9fev6nbXcuSWT2m0ufgFf2ZIXlkyFX/QWPoKtW/9UmamdH1GAQYmComYjXtbM78zxFprRyM4lSrHB/jhRwxcVvjOCY2/9iTpo2+1HX6p9XHDx4nxTAJZkzpsXDKNKlaZKtDFs3ne/KND9Ztv7ZwYnPh65bZkDqpqKcbVJ1OU8MnOMhaA9/GvRAXcrLAeCl0rQsMPpjNAftSS/TAmu3PF+IhHRwuYQN5r4mtlCftmY5YaRYIaLq/ZDJSmgGJ8WQFrmx5tDkgfpKs8AlAj0v02xv6kTRvJL+ImzYlvrJNmszOI9HBgI0Pi6g/NlM96SFqxu2/W1cwvA9ehlNUyAsGc8ZTgJMrssWveLr1kAWuvZM3xa5geR/VZYlgCv4zNeuKads68O6GSpQ8zPN8gZYztsTgcQM0M+OcxE7ud4oD06Obkm0+pmvAAoWMO5fxt4BaDGE0zxykfQCECkbY/kVmgwuTmQU1mGDxVryUpcGnRubnGyjLwRgHib1FltY7aHs4XemlPsPzU/LjSgdcqQzIp9MRF1Nz/OidrnFabnxZnwzt10/J48Zjx6uJLsp68oIYiaz91TjZjMgcYqh1s1JW/ijEcDkTjiD+ioA2YPmZ0a6NOsEKpgsfVqyg3aj9XbxyXvDDDbRt02qMd+ChDQAaYTLBk+niKvNwPuo/QBX+pLKHpougMFfRKdmxk+bkrUOLD/AJnzscretOw/AAAAAElFTkSuQmCC"
                       alt="">
                   </div>
-                  <div class="btn" title="点播" :onclick="handlePlay.bind(null, item)"
-                       style="padding-top: 3px;">
+                  <div class="btn" title="点播" :onclick="handlePlay.bind(null, item)">
                     <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"
                          viewBox="0 0 1024 1024">
                       <path fill="#266CFBFF"
@@ -81,6 +81,14 @@
                       src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACIAAAAeCAYAAABJ/8wUAAAAAXNSR0IArs4c6QAAAwpJREFUWEftV0Fu00AUfd8hXVQs0l1IinBPQHoCnBuEExCk1i1sak7Q9AQNCyRoKjWcoPQEgRMknKBGokkQmyBBBWkzD41Tp67r2A4JEgu8tP//8+bPm/+eBf/II4vCUdxkSRl4IkQFgBlRtwNBRwn2+q/FDX9fCJDiBh0a2E+5KfeCePy1IZ1g/NxAipusUnCkixKoI4t675V8CoPKP+MjYwQHQAXEQGWwHuzMXEDMKnPDJbT1UYwI50tDXiZ1pWhzn4BD4n2vIWU/fi4gfjfCRePAaPAXWZxSkGMWpt89D0jBZkWInaTd0IDbfSNP/bjA7pxeim74eYUtHkOTmugIMNDvPSB+wSQg+vv5ECuDpnjJhS0egagKUD07kLdp8oN5kWTVZEoqlLnEt7MA21c3uaMEdU3S3oG8SMoPdLJNoETC4R14t2cujuS3aRkKrahbMA3UfZuVEXBMwO0dyNpCyKqL3NtiSwgLgKsMlKOGlb/Y6jYtpbyrbiqFWv9Q9hYGJF+lKUtoyfU0fQeM232DAwKLY8BQRLPfuCb93EfjL6TBGFnsQlCN5YkeZEQ92ImFdSS4sAaELCxD8CAMSAHuzyFO/Bt3q2Npmf634+a6NYsE9x/IH3FE33+M8FAJcsECBjEA8fHzobyf95hij+ZKDI+0UiYslDjMkoBOBVKwWQOwqwtomdc2z1fKSVHCpMDyhhkxuADKYeeVBCB2juS3aRoKpzoojeEJqLd7PsT6tFkRByqyI75fCOtBXKGJ5ijUugENmakjOYe5u99R8pOUgZanCUOs9Zu3HXdU8YmqhixguPY0YHHGyO0GZDppZ4HjvJFXtOl5j6R8D0h+g5ZkxsTUjyfrxKDbkJWkAv734nOWeIk2iU6vIev++7zNXZGx6s7OEZuaqNozlPspZ8SEsESzG5L4JBDe5qOCCjZ1d/T1TTUf9LFkRmjreaMIq9+QD2kWD8ZEAtGW/9cS2ldmxxWg9mMZJ4P62DT7jybi8jkc/Qfg/R7M6F0TgXi8ue28YjcZ5bpm6cpvMNhsJB8wSzUAAAAASUVORK5CYII="
                       alt="">
                   </div>
+                  <div
+                    v-if="showLocationAction"
+                    class="btn"
+                    title="设置坐标"
+                    @click="handleSetLocation(item)"
+                  >
+                    <Icon icon="ant-design:environment-outlined" :size="15" color="#266CFBFF" />
+                  </div>
                   <!--                  <div class="btn"  title="设备录像" :onclick="handleDeviceRecord.bind(null, item)" style="margin-top: 6px">-->
                   <!--                    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"-->
                   <!--                         viewBox="0 0 24 24">-->
@@ -89,8 +97,7 @@
                   <!--                      <path fill="#266CFBFF" d="M6 14h6v2H6z"/>-->
                   <!--                    </svg>-->
                   <!--                  </div>-->
-                  <div class="btn" title="设备抓拍" :onclick="handleSnapshot.bind(null, item)"
-                       style="margin-top: 6px">
+                  <div class="btn" title="设备抓拍" :onclick="handleSnapshot.bind(null, item)">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"
                          viewBox="0 0 16 16">
                       <path fill="#266CFBFF" fill-rule="evenodd"
@@ -101,8 +108,7 @@
                             clip-rule="evenodd"/>
                     </svg>
                   </div>
-                  <div class="btn" title="云端录像" :onclick="handleCloudRecord.bind(null, item)"
-                       style="margin-top: 4px">
+                  <div class="btn" title="云端录像" :onclick="handleCloudRecord.bind(null, item)">
                     <svg xmlns="http://www.w3.org/2000/svg" width="34" height="32"
                          viewBox="0 0 20 20">
                       <path fill="#266CFBFF"
@@ -135,6 +141,11 @@ import HAIKANG_IMAGE from "@/assets/images/video/haikang.png";
 import HUAWEI_IMAGE from "@/assets/images/video/huawei.png";
 import OTHER_IMAGE from "@/assets/images/video/other.png";
 import {useModal} from "@/components/Modal";
+import { Icon } from '@/components/Icon';
+import {
+  formatGbChannelDeviceType,
+  normalizeWvpChannelItem,
+} from '@/views/camera/utils/gb28181Channel';
 
 const [registerAddModel, {openModal: openAddModal}] = useModal();
 
@@ -145,10 +156,21 @@ const props = defineProps({
   params: propTypes.object.def({}),
   //api
   api: propTypes.func,
+  /** 嵌入摄像头设备列表时展示「设置坐标」 */
+  showLocationAction: propTypes.bool.def(false),
 });
 const {createMessage} = useMessage()
 //暴露内部方法
-const emit = defineEmits(['getMethod', 'delete', 'edit', 'view', 'play', 'deviceRecord', 'cloudRecord']);
+const emit = defineEmits([
+  'getMethod',
+  'delete',
+  'edit',
+  'view',
+  'play',
+  'setLocation',
+  'deviceRecord',
+  'cloudRecord',
+]);
 //数据
 const data = ref([]);
 
@@ -157,6 +179,11 @@ const state = reactive({
 });
 
 function handleSuccess() {
+}
+
+function formatChannelManufacturer(item: Record<string, unknown>) {
+  const name = (item.manufacturer ?? item.manufacture ?? '').toString().trim();
+  return name ? name.toUpperCase() : '-';
 }
 
 //表单
@@ -208,7 +235,8 @@ async function fetch(p = {}) {
     // 兼容两种返回格式：1) { data: list, total }  2) { data: { list, total } }
     const pageData = res?.data;
     const list = Array.isArray(pageData) ? pageData : (pageData?.list ?? []);
-    data.value = list;
+    const sipId = String(params?.deviceIdentification ?? params?.deviceId ?? '').trim();
+    data.value = list.map((row) => normalizeWvpChannelItem(row, sipId));
     total.value = res?.total ?? pageData?.total ?? 0;
   } finally {
     hideLoading();
@@ -256,6 +284,10 @@ async function handleCopy(record: object) {
 
 async function handleEdit(record: object) {
   emit('edit', record);
+}
+
+function handleSetLocation(record: object) {
+  emit('setLocation', record);
 }
 
 async function handleDeviceRecord(record: object) {
@@ -313,6 +345,22 @@ async function handleDelete(record: object) {
     min-height: 208px;
     height: 100%;
 
+    .status {
+      min-width: 90px;
+      height: 25px;
+      border-radius: 6px 0 0 6px;
+      font-size: 12px;
+      font-weight: 500;
+      line-height: 25px;
+      text-align: center;
+      position: absolute;
+      right: 0;
+      top: 16px;
+      padding: 0 8px;
+      white-space: nowrap;
+      z-index: 1;
+    }
+
     &.normal {
       background-image: url('@/assets/images/product/blue-bg.719b437a.png');
 
@@ -335,19 +383,9 @@ async function handleDelete(record: object) {
       flex-direction: column;
       max-width: calc(100% - 128px);
       padding-left: 16px;
-
-      .status {
-        width: 57px;
-        height: 25px;
-        border-radius: 6px 0 0 6px;
-        font-size: 12px;
-        font-weight: 500;
-        line-height: 25px;
-        text-align: center;
-        position: absolute;
-        right: 0;
-        top: 16px;
-      }
+      padding-bottom: 52px;
+      position: relative;
+      box-sizing: border-box;
 
       .title {
         font-size: 16px;
@@ -355,6 +393,7 @@ async function handleDelete(record: object) {
         color: #050708;
         line-height: 20px;
         height: 40px;
+        padding-right: 88px;
       }
 
       .props {
@@ -363,6 +402,7 @@ async function handleDelete(record: object) {
         .prop {
           flex: 1;
           margin-bottom: 10px;
+          min-width: 0;
 
           .label {
             font-size: 12px;
@@ -382,6 +422,33 @@ async function handleDelete(record: object) {
             margin-top: 6px;
           }
         }
+
+        .props-row {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          margin-bottom: 10px;
+          padding-right: 6px;
+
+          .prop {
+            flex: 0 1 46%;
+            min-width: 0;
+            margin-bottom: 0;
+
+            .label,
+            .value {
+              text-align: left;
+            }
+
+            &:last-child {
+              flex: 0 1 40%;
+            }
+          }
+        }
+
+        .prop-channel-id {
+          margin-bottom: 6px;
+        }
       }
 
       .btns {
@@ -389,29 +456,50 @@ async function handleDelete(record: object) {
         position: absolute;
         left: 16px;
         bottom: 16px;
-        margin-top: 20px;
+        margin-top: 0;
         width: 200px;
         height: 28px;
         border-radius: 45px;
         justify-content: space-around;
         padding: 0 10px;
         align-items: center;
-        border: 2px solid #266CFBFF;
+        border: 2px solid #266cfbff;
+        box-sizing: border-box;
+
+        /* 设备列表嵌入时多「设置坐标」，略加宽胶囊条 */
+        &--embedded {
+          width: 252px;
+          padding: 0 14px;
+        }
+
+        > * {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          flex-shrink: 0;
+        }
 
         .btn {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
           width: 28px;
+          height: 28px;
           text-align: center;
           position: relative;
+          cursor: pointer;
+          flex-shrink: 0;
 
           &:before {
-            content: "";
+            content: '';
             display: block;
             position: absolute;
             width: 1px;
             height: 7px;
             background-color: #e2e2e2;
             left: 0;
-            top: 9px;
+            top: 50%;
+            transform: translateY(-50%);
           }
 
           &:first-child:before {
@@ -426,10 +514,16 @@ async function handleDelete(record: object) {
           }
 
           svg {
-            width: 18px;
-            height: 18px;
+            width: 16px;
+            height: 16px;
             cursor: pointer;
-            margin-top: 4px;
+            display: block;
+          }
+
+          :deep(.anticon) {
+            display: flex;
+            align-items: center;
+            justify-content: center;
           }
         }
       }

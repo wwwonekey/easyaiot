@@ -617,11 +617,105 @@ def list_device_locations():
         return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
 
+@camera_bp.route('/device/<string:device_id>/location', methods=['GET'])
+def get_device_location_route(device_id):
+    """获取单个摄像头坐标（地图选点弹窗，国标虚拟通道按需入库）。"""
+    try:
+        ensure_name = (request.args.get('name') or request.args.get('ensure_name') or '').strip() or None
+        info = get_device_location_info(device_id, ensure_name=ensure_name)
+        return jsonify({'code': 0, 'msg': 'success', 'data': info})
+    except ValueError as e:
+        logger.error(f'获取设备坐标失败: {str(e)}')
+        return jsonify({'code': 400, 'msg': str(e)}), 400
+    except Exception as e:
+        logger.error(f'获取设备坐标失败: {str(e)}')
+        return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
+
+
+@camera_bp.route('/device/<string:device_id>/location', methods=['PUT'])
+def update_device_location_route(device_id):
+    """更新单个摄像头位置（地图选点等）。"""
+    try:
+        data = request.get_json() or {}
+        ensure_name = (data.pop('name', None) or data.pop('ensure_name', None) or '').strip() or None
+        loc = update_device_location(device_id, data, ensure_name=ensure_name)
+        return jsonify({'code': 0, 'msg': '位置更新成功', 'data': loc})
+    except ValueError as e:
+        return jsonify({'code': 400, 'msg': str(e)}), 400
+    except Exception as e:
+        logger.error(f'更新摄像头位置失败: {str(e)}')
+        return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
+
+
+@camera_bp.route('/locations/batch', methods=['POST'])
+def batch_update_locations():
+    """批量更新摄像头位置（CSV 导入等）。"""
+    try:
+        data = request.get_json() or {}
+        items = data.get('items') or data.get('locations') or []
+        if not isinstance(items, list):
+            return jsonify({'code': 400, 'msg': 'items 需为数组'}), 400
+        if len(items) > 500:
+            return jsonify({'code': 400, 'msg': '单次最多导入 500 条'}), 400
+        result = batch_update_device_locations(items)
+        return jsonify({'code': 0, 'msg': 'success', 'data': result})
+    except Exception as e:
+        logger.error(f'批量更新摄像头位置失败: {str(e)}')
+        return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
+
+
+@camera_bp.route('/tracks/sessions', methods=['GET'])
+def list_device_track_sessions():
+    """查询摄像头轨迹段列表。"""
+    try:
+        device_id = request.args.get('device_id')
+        begin = request.args.get('begin_datetime') or request.args.get('begin')
+        end = request.args.get('end_datetime') or request.args.get('end')
+        limit = request.args.get('limit', 50)
+        items = list_track_sessions(
+            device_id=device_id,
+            begin=begin,
+            end=end,
+            limit=int(limit) if str(limit).isdigit() else 50,
+        )
+        return jsonify({'code': 0, 'msg': 'success', 'data': items, 'total': len(items)})
+    except ValueError as e:
+        return jsonify({'code': 400, 'msg': str(e)}), 400
+    except Exception as e:
+        logger.error(f'轨迹段列表查询失败: {str(e)}')
+        return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
+
+
+@camera_bp.route('/tracks/points', methods=['GET'])
+def list_device_track_points():
+    """查询轨迹点（按 session_id 或 device_id + 时间）。"""
+    try:
+        session_id = request.args.get('session_id')
+        device_id = request.args.get('device_id')
+        begin = request.args.get('begin_datetime') or request.args.get('begin')
+        end = request.args.get('end_datetime') or request.args.get('end')
+        limit = request.args.get('limit', 5000)
+        items = list_track_points(
+            session_id=session_id,
+            device_id=device_id,
+            begin=begin,
+            end=end,
+            limit=int(limit) if str(limit).isdigit() else 5000,
+        )
+        return jsonify({'code': 0, 'msg': 'success', 'data': items, 'total': len(items)})
+    except ValueError as e:
+        return jsonify({'code': 400, 'msg': str(e)}), 400
+    except Exception as e:
+        logger.error(f'轨迹点查询失败: {str(e)}')
+        return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
+
+
 @camera_bp.route('/device/<string:device_id>', methods=['GET'])
 def get_device_info(device_id):
     """获取单个设备详情"""
     try:
-        info = get_camera_info(device_id)
+        ensure_name = (request.args.get('name') or request.args.get('ensure_name') or '').strip() or None
+        info = get_camera_info(device_id, ensure_name=ensure_name)
         return jsonify({
             'code': 0,
             'msg': 'success',
@@ -629,7 +723,7 @@ def get_device_info(device_id):
         })
     except ValueError as e:
         logger.error(f'获取设备详情失败: {str(e)}')
-        return jsonify({'code': 400, 'msg': f'设备 {device_id} 不存在'}), 400
+        return jsonify({'code': 400, 'msg': str(e)}), 400
     except Exception as e:
         logger.error(f'获取设备详情失败: {str(e)}')
         return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
@@ -1851,6 +1945,7 @@ def on_dvr_callback():
         create_record_space_for_device,
         get_minio_client
     )
+    from app.utils.minio_bucket_policy import ensure_bucket_public_read_write_policy
     from models import Device, Playback
     
     try:
@@ -2049,7 +2144,7 @@ def on_dvr_callback():
         minio_client = get_minio_client()
         bucket_name = record_space.bucket_name
         
-        # 确保bucket存在
+        # 确保 bucket 存在且具备公开策略（否则前端 /api/v1/buckets/.../download 返回 500）
         if not minio_client.bucket_exists(bucket_name):
             try:
                 minio_client.make_bucket(bucket_name)
@@ -2057,6 +2152,7 @@ def on_dvr_callback():
             except Exception as e:
                 logger.error(f"on_dvr回调：创建MinIO bucket失败 bucket_name={bucket_name}, error={str(e)}", exc_info=True)
                 return jsonify({'code': 0, 'msg': None})
+        ensure_bucket_public_read_write_policy(minio_client, bucket_name)
         
         try:
             # 上传文件到MinIO
