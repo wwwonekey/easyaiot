@@ -13,6 +13,7 @@ import com.basiclab.iot.dataset.service.DatasetAnnotationService;
 import com.basiclab.iot.dataset.service.DatasetImageService;
 import com.basiclab.iot.dataset.service.DatasetService;
 import com.basiclab.iot.dataset.service.DatasetTagService;
+import com.basiclab.iot.dataset.service.annotation.DatasetAnnotationParseUtil;
 import com.basiclab.iot.dataset.service.ImportCancelChecker;
 import com.basiclab.iot.dataset.service.ImportCancelledException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -98,17 +99,33 @@ public class DatasetAnnotationServiceImpl implements DatasetAnnotationService {
         if (filtered.isEmpty()) {
             throw exception(DATASET_NO_IMAGES);
         }
-        Collections.shuffle(filtered);
 
-        int total = filtered.size();
-        int trainCount = trainRatio > 0 ? (int) (total * trainRatio) : 0;
-        int valCount = valRatio > 0 ? (int) (total * valRatio) : 0;
-        int testCount = testRatio > 0 ? (int) (total * testRatio) : 0;
-        List<DatasetImageDO> train = filtered.subList(0, Math.min(trainCount, filtered.size()));
-        List<DatasetImageDO> val = trainCount < filtered.size()
-                ? filtered.subList(trainCount, Math.min(trainCount + valCount, filtered.size())) : List.of();
-        List<DatasetImageDO> test = trainCount + valCount < filtered.size()
-                ? filtered.subList(trainCount + valCount, Math.min(trainCount + valCount + testCount, filtered.size())) : List.of();
+        Map<String, String> shortcutToName = buildShortcutToNameMap(datasetId);
+        List<DatasetImageDO> train;
+        List<DatasetImageDO> val;
+        List<DatasetImageDO> test;
+        if (isUsageAllocated(filtered)) {
+            train = filtered.stream()
+                    .filter(img -> img.getIsTrain() != null && img.getIsTrain() == 1)
+                    .collect(Collectors.toList());
+            val = filtered.stream()
+                    .filter(img -> img.getIsValidation() != null && img.getIsValidation() == 1)
+                    .collect(Collectors.toList());
+            test = filtered.stream()
+                    .filter(img -> img.getIsTest() != null && img.getIsTest() == 1)
+                    .collect(Collectors.toList());
+        } else {
+            Collections.shuffle(filtered);
+            int total = filtered.size();
+            int trainCount = trainRatio > 0 ? (int) (total * trainRatio) : 0;
+            int valCount = valRatio > 0 ? (int) (total * valRatio) : 0;
+            int testCount = total - trainCount - valCount;
+            train = filtered.subList(0, Math.min(trainCount, filtered.size()));
+            val = trainCount < filtered.size()
+                    ? filtered.subList(trainCount, Math.min(trainCount + valCount, filtered.size())) : List.of();
+            test = trainCount + valCount < filtered.size()
+                    ? filtered.subList(trainCount + valCount, Math.min(trainCount + valCount + testCount, filtered.size())) : List.of();
+        }
 
         String timestamp = DateTimeFormatter.ofPattern("yyyyMMddHHmmss").format(LocalDateTime.now());
         String zipName = "datasets_" + timestamp + ".zip";
@@ -126,9 +143,9 @@ public class DatasetAnnotationServiceImpl implements DatasetAnnotationService {
             writeZipEntry(zos, "classes.txt", String.join("\n", selectedClasses).getBytes(StandardCharsets.UTF_8));
 
             String prefix = Optional.ofNullable(reqVO.getExportPrefix()).orElse("").trim();
-            writeSplit(zos, "train", train, classToId, selectedClasses, prefix);
-            writeSplit(zos, "val", val, classToId, selectedClasses, prefix);
-            writeSplit(zos, "test", test, classToId, selectedClasses, prefix);
+            writeSplit(zos, "train", train, classToId, selectedClasses, shortcutToName, prefix);
+            writeSplit(zos, "val", val, classToId, selectedClasses, shortcutToName, prefix);
+            writeSplit(zos, "test", test, classToId, selectedClasses, shortcutToName, prefix);
             zos.finish();
         }
     }
@@ -552,14 +569,15 @@ public class DatasetAnnotationServiceImpl implements DatasetAnnotationService {
     }
 
     private void writeSplit(ZipOutputStream zos, String split, List<DatasetImageDO> images,
-                            Map<String, Integer> classToId, List<String> selectedClasses, String prefix) throws IOException {
+                            Map<String, Integer> classToId, List<String> selectedClasses,
+                            Map<String, String> shortcutToName, String prefix) throws IOException {
         for (DatasetImageDO image : images) {
             try {
                 byte[] imgBytes = readImageBytesFromMinio(image.getPath());
                 String flat = image.getName().replace("\\", "/").replace("/", "__");
                 String imgName = prefix.isEmpty() ? flat : prefix + "_" + flat;
                 writeZipEntry(zos, split + "/images/" + imgName, imgBytes);
-                String label = buildYoloLabelContent(image, classToId, selectedClasses);
+                String label = buildYoloLabelContent(image, classToId, selectedClasses, shortcutToName);
                 String labelName = stripExt(imgName) + ".txt";
                 writeZipEntry(zos, split + "/labels/" + labelName, label.getBytes(StandardCharsets.UTF_8));
             } catch (Exception e) {
@@ -568,7 +586,26 @@ public class DatasetAnnotationServiceImpl implements DatasetAnnotationService {
         }
     }
 
-    private String buildYoloLabelContent(DatasetImageDO image, Map<String, Integer> classToId, List<String> selectedClasses) {
+    private Map<String, String> buildShortcutToNameMap(Long datasetId) {
+        Map<String, String> shortcutToName = new HashMap<>();
+        Map<String, String> nameToShortcut = DatasetAnnotationParseUtil.nameToShortcutFromTags(
+                datasetTagService.listTagsByDatasetId(datasetId));
+        for (Map.Entry<String, String> entry : nameToShortcut.entrySet()) {
+            shortcutToName.put(entry.getValue(), entry.getKey());
+        }
+        return shortcutToName;
+    }
+
+    private boolean isUsageAllocated(List<DatasetImageDO> images) {
+        if (images.isEmpty()) return false;
+        return images.stream().allMatch(img ->
+                (img.getIsTrain() != null && img.getIsTrain() == 1)
+                        || (img.getIsValidation() != null && img.getIsValidation() == 1)
+                        || (img.getIsTest() != null && img.getIsTest() == 1));
+    }
+
+    private String buildYoloLabelContent(DatasetImageDO image, Map<String, Integer> classToId,
+                                         List<String> selectedClasses, Map<String, String> shortcutToName) {
         if (image.getAnnotations() == null || image.getAnnotations().isBlank()) return "";
         try {
             List<Map<String, Object>> anns = MAPPER.readValue(image.getAnnotations(), new TypeReference<>() {});
@@ -576,7 +613,9 @@ public class DatasetAnnotationServiceImpl implements DatasetAnnotationService {
             int w = image.getWidth() != null && image.getWidth() > 0 ? image.getWidth() : 1;
             int h = image.getHeigh() != null && image.getHeigh() > 0 ? image.getHeigh() : 1;
             for (Map<String, Object> ann : anns) {
-                String labelName = String.valueOf(ann.getOrDefault("label", ann.getOrDefault("class", "")));
+                String rawLabel = String.valueOf(ann.getOrDefault("label", ann.getOrDefault("class", ""))).trim();
+                if (rawLabel.isEmpty()) continue;
+                String labelName = shortcutToName.getOrDefault(rawLabel, rawLabel);
                 if (!selectedClasses.contains(labelName) || !classToId.containsKey(labelName)) continue;
                 List<Map<String, Object>> points = (List<Map<String, Object>>) ann.get("points");
                 if (points == null || points.size() < 4) continue;

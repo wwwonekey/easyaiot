@@ -20,6 +20,7 @@ export interface DatasetTagItem {
   color: string;
   shortcut: string;
   description?: string;
+  datasetId?: number;
 }
 
 /** 解析 #RGB / #RRGGBB */
@@ -54,6 +55,7 @@ export function mapTagRow(tag: Record<string, unknown>): DatasetTagItem {
     color: String(tag.color || TAG_COLOR_PALETTE[0]),
     shortcut: String(tag.shortcut ?? ''),
     description: tag.description as string | undefined,
+    datasetId: tag.datasetId != null ? Number(tag.datasetId) : undefined,
   };
 }
 

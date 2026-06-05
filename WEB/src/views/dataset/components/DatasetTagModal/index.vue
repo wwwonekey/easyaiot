@@ -97,9 +97,13 @@ const {validate, resetFields, validateInfos} = useForm(modelRef, rulesRef);
 async function datasetEdit(record) {
   try {
     state.editLoading = true;
+    const preservedDatasetId = modelRef.datasetId;
     Object.keys(modelRef).forEach((item) => {
-      modelRef[item] = record[item];
+      if (record[item] !== undefined && record[item] !== null) {
+        modelRef[item] = record[item];
+      }
     });
+    modelRef.datasetId = preservedDatasetId;
     state.editLoading = false;
     state.record = record;
   } catch (error) {

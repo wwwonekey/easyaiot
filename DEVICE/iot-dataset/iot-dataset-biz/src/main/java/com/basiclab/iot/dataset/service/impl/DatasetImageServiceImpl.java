@@ -19,6 +19,7 @@ import com.basiclab.iot.dataset.domain.dataset.vo.DatasetSyncCheckRespVO;
 import com.basiclab.iot.dataset.domain.dataset.vo.DatasetTagPageReqVO;
 import com.basiclab.iot.dataset.service.DatasetImageService;
 import com.basiclab.iot.dataset.service.DatasetTagService;
+import com.basiclab.iot.dataset.service.annotation.DatasetAnnotationParseUtil;
 import com.basiclab.iot.dataset.service.ImportCancelChecker;
 import com.basiclab.iot.file.RemoteFileService;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -289,11 +290,11 @@ public class DatasetImageServiceImpl implements DatasetImageService {
             String usageType = getUsageType(image);
             String imageName = image.getName();
             Path imagePath = tempDir.resolve("images/" + usageType + "/" + imageName);
-            String labelFileName = imageName.substring(0, imageName.lastIndexOf('.')) + ".txt";
+            String labelFileName = stripImageExtension(imageName) + ".txt";
             Path labelPath = tempDir.resolve("labels/" + usageType + "/" + labelFileName);
             try {
                 downloadImageToTemp(image, imagePath);
-                createLabelFile(image, labelPath);
+                createLabelFile(image, labelPath, datasetId);
             } catch (Exception e) {
                 skippedCount++;
                 logger.warn("跳过文件 {}: {}", image.getName(), e.getMessage());
@@ -352,10 +353,10 @@ public class DatasetImageServiceImpl implements DatasetImageService {
         }
     }
 
-    private void createLabelFile(DatasetImageDO image, Path labelPath) {
+    private void createLabelFile(DatasetImageDO image, Path labelPath, Long datasetId) {
         try {
             Files.createDirectories(labelPath.getParent());
-            String labelContent = generateLabelContent(image.getAnnotations());
+            String labelContent = generateLabelContent(image.getAnnotations(), datasetId);
             Files.write(labelPath, labelContent.getBytes(StandardCharsets.UTF_8),
                     StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
         } catch (Exception e) {
@@ -363,23 +364,37 @@ public class DatasetImageServiceImpl implements DatasetImageService {
         }
     }
 
-    private String generateLabelContent(String annotationsJson) {
+    private String stripImageExtension(String imageName) {
+        int dot = imageName.lastIndexOf('.');
+        return dot > 0 ? imageName.substring(0, dot) : imageName;
+    }
+
+    private String generateLabelContent(String annotationsJson, Long datasetId) {
         try {
-            // 解析标注信息
+            List<String> classNames = getClassNames(datasetId);
+            Map<String, Integer> nameToIndex = new HashMap<>();
+            for (int i = 0; i < classNames.size(); i++) {
+                nameToIndex.put(classNames.get(i), i);
+            }
+            Map<String, String> shortcutToName = new HashMap<>();
+            Map<String, String> nameToShortcut = DatasetAnnotationParseUtil.nameToShortcutFromTags(
+                    datasetTagService.listTagsByDatasetId(datasetId));
+            for (Map.Entry<String, String> entry : nameToShortcut.entrySet()) {
+                shortcutToName.put(entry.getValue(), entry.getKey());
+            }
+
             List<Map<String, Object>> annotations = parseAnnotations(annotationsJson);
             StringBuilder labelContent = new StringBuilder();
 
             for (Map<String, Object> annotation : annotations) {
-                // 获取标签ID（类别）
                 Object labelObj = annotation.get("label");
-                Integer label = null;
-                if (labelObj instanceof Integer) {
-                    label = (Integer) labelObj;
-                } else if (labelObj instanceof String) {
-                    label = Integer.parseInt((String) labelObj);
-                } else {
-                    // 处理无法识别的标签类型
-                    logger.warn("无法识别的标签类型: {}", labelObj);
+                if (labelObj == null) continue;
+                String rawLabel = String.valueOf(labelObj).trim();
+                if (rawLabel.isEmpty()) continue;
+                String labelName = shortcutToName.getOrDefault(rawLabel, rawLabel);
+                Integer classId = nameToIndex.get(labelName);
+                if (classId == null) {
+                    logger.warn("未找到类别映射: shortcut={}, name={}", rawLabel, labelName);
                     continue;
                 }
 
@@ -411,10 +426,8 @@ public class DatasetImageServiceImpl implements DatasetImageService {
                 double width = maxX - minX;
                 double height = maxY - minY;
 
-                // 格式化边界框信息 (保留5位小数)
-                // YOLO格式: <class_id> <center_x> <center_y> <width> <height>
                 labelContent.append(String.format("%d %.5f %.5f %.5f %.5f\n",
-                        label, centerX, centerY, width, height));
+                        classId, centerX, centerY, width, height));
             }
 
             return labelContent.toString();
