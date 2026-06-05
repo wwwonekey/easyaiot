@@ -615,14 +615,11 @@ Veuillez d'abord suivre le compte officiel ci-dessous, puis nous contacter via l
 ## 💬 Groupe d'échange technique
 
 <p style="font-size: 14px; line-height: 1.8; color: #555; margin: 15px 0;">
-Après avoir suivi le compte officiel, scannez les codes QR ci-dessous avec WeChat pour rejoindre le groupe d'échange technique EasyAIoT. Si un groupe est complet, essayez le suivant.
+Après avoir suivi le compte officiel, scannez le code QR ci-dessous avec WeChat pour rejoindre le groupe d'échange technique EasyAIoT.
 </p>
 
-<div style="display: flex; flex-wrap: wrap; gap: 12px; margin: 20px 0;">
-  <img src=".image/交流群2群.jpg" alt="Groupe d'échange technique EasyAIoT 2" width="24%">
-  <img src=".image/交流群3群.jpg" alt="Groupe d'échange technique EasyAIoT 3" width="24%">
-  <img src=".image/交流群4群.jpg" alt="Groupe d'échange technique EasyAIoT 4" width="24%">
-  <img src=".image/交流群5群.jpg" alt="Groupe d'échange technique EasyAIoT 5" width="24%">
+<div>
+  <img src=".image/交流群3群.jpg" alt="Groupe d'échange technique EasyAIoT" width="30%">
 </div>
 
 ## 💬 Contact WeChat

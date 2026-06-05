@@ -419,17 +419,24 @@ class AlgorithmTaskDaemon:
         
         # 准备环境变量（使用传入的参数）
         env = os.environ.copy()
-        # 子进程 cwd 为 services/*_algorithm_service，需显式加载 VIDEO/.env（含 GATEWAY_URL / GB28181_SERVICE_URL）
+        # 子进程 cwd 为 services/*_algorithm_service，需显式加载 VIDEO 根目录 env（与 run.py --env 一致）
         video_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-        env_path = os.path.join(video_root, '.env')
-        if os.path.isfile(env_path):
-            load_dotenv(env_path, override=False)
+        video_env = os.getenv('VIDEO_ENV', '').strip()
+        env_candidates = []
+        if video_env:
+            env_candidates.append(os.path.join(video_root, f'.env.{video_env}'))
+        env_candidates.append(os.path.join(video_root, '.env'))
+        for env_path in env_candidates:
+            if os.path.isfile(env_path):
+                load_dotenv(env_path, override=False)
+                break
         for key in (
             'DATABASE_URL', 'GATEWAY_URL', 'GB28181_SERVICE_URL', 'JWT_TOKEN',
             'GB28181_HTTP_READ_TIMEOUT', 'GB28181_PLAY_PROTOCOL', 'GB28181_HEVC_RTSP_FIRST',
             'GB28181_OPENCV_RTMP_FALLBACK_RTSP', 'POD_IP', 'HOST_IP',
             'USE_GPU', 'GPU_IDS', 'GPU_POLICY', 'INFER_GPU_POLICY', 'FFMPEG_GPU_POLICY',
             'CUDA_VISIBLE_DEVICES', 'NVIDIA_VISIBLE_DEVICES', 'ORT_EXECUTION_PROVIDERS',
+            'KAFKA_BOOTSTRAP_SERVERS',
         ):
             val = os.getenv(key)
             if val is not None and val != '':

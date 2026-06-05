@@ -581,14 +581,11 @@ Please follow our official account below first, then reach us via the technical 
 ## 💬 Technical Exchange Group
 
 <p style="font-size: 14px; line-height: 1.8; color: #555; margin: 15px 0;">
-After following the official account, scan the QR codes below with WeChat to join the EasyAIoT technical exchange group. If one group is full, please try the next one.
+After following the official account, scan the QR code below with WeChat to join the EasyAIoT technical exchange group.
 </p>
 
-<div style="display: flex; flex-wrap: wrap; gap: 12px; margin: 20px 0;">
-  <img src=".image/交流群2群.jpg" alt="EasyAIoT Technical Exchange Group 2" width="24%">
-  <img src=".image/交流群3群.jpg" alt="EasyAIoT Technical Exchange Group 3" width="24%">
-  <img src=".image/交流群4群.jpg" alt="EasyAIoT Technical Exchange Group 4" width="24%">
-  <img src=".image/交流群5群.jpg" alt="EasyAIoT Technical Exchange Group 5" width="24%">
+<div>
+  <img src=".image/交流群3群.jpg" alt="EasyAIoT Technical Exchange Group" width="30%">
 </div>
 
 ## 💬 WeChat Contact

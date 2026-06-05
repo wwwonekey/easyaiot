@@ -56,6 +56,9 @@ def load_env_file(env_name=''):
 # 解析命令行参数并加载配置文件
 args = parse_args()
 load_env_file(args.env)
+# 供 algorithm_task_daemon 等子进程加载同一套环境（避免仅读 .env 覆盖 prod 配置）
+if args.env:
+    os.environ['VIDEO_ENV'] = args.env
 
 # 在导入 ONNX 相关模块前补全 pip 安装的 nvidia CUDA 库路径（非 Docker 直跑也生效）
 import app.utils.nvidia_lib_path  # noqa: F401
