@@ -52,7 +52,7 @@ public class DatasetTagController {
     @PutMapping("/update")
     @Operation(summary = "更新数据集标签")
     //@PreAuthorize("@ss.hasPermission('dataset:tag:update')")
-    public CommonResult<Boolean> updateDatasetTag(@Valid @RequestBody DatasetTagSaveReqVO updateReqVO) {
+    public CommonResult<Boolean> updateDatasetTag(@RequestBody DatasetTagSaveReqVO updateReqVO) {
         datasetTagService.updateDatasetTag(updateReqVO);
         return success(true);
     }

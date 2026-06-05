@@ -146,10 +146,14 @@ async function handleQuickAdd() {
 
 function openEdit(tag: DatasetTagItem) {
   openTagModal(true, {
-    datasetId: props.datasetId,
+    datasetId: Number(props.datasetId),
     isEdit: true,
     isView: false,
-    record: tag,
+    record: {
+      ...tag,
+      datasetId: Number(props.datasetId || tag.datasetId),
+      shortcut: Number(tag.shortcut),
+    },
   });
 }
 

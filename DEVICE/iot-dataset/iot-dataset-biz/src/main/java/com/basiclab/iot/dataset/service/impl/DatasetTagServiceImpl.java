@@ -67,8 +67,14 @@ public class DatasetTagServiceImpl implements DatasetTagService {
 
     @Override
     public void updateDatasetTag(DatasetTagSaveReqVO updateReqVO) {
+        if (updateReqVO.getId() == null) {
+            throw exception(DATASET_TAG_NOT_EXISTS);
+        }
         // 校验标签存在性
         DatasetTagDO oldTag = validateDatasetTagExists(updateReqVO.getId());
+        if (updateReqVO.getDatasetId() == null) {
+            updateReqVO.setDatasetId(oldTag.getDatasetId());
+        }
         // 在当前数据集ID，快捷键不能重复
         LambdaQueryWrapper<DatasetTagDO> wrapper = Wrappers.lambdaQuery();
         wrapper.eq(DatasetTagDO::getDatasetId, updateReqVO.getDatasetId());
