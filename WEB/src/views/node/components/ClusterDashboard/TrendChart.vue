@@ -103,7 +103,7 @@ const metricHint = computed(() => {
     return `${NODE_DASHBOARD.trendNodeVolumeHint}${metricLabels[props.metricKey]}`;
   }
   if (isCpuMetric.value) {
-    return `${NODE_DASHBOARD.trendNodeVolumeHint}${metricLabels[props.metricKey]}（%，多核可超过 100%）`;
+    return `${NODE_DASHBOARD.trendNodeVolumeHint}${metricLabels[props.metricKey]}（%）`;
   }
   return `${NODE_DASHBOARD.trendNodePercentHint}${metricLabels[props.metricKey]}`;
 });

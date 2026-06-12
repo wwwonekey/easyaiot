@@ -140,7 +140,7 @@ Innovatively leveraging large models to construct a zero-shot labeling technical
 ### 🏗️ Project Architecture Features
 
 <p style="font-size: 14px; line-height: 1.8; color: #555; margin: 15px 0;">
-EasyAIoT is not actually one project; it is seven distinct projects.
+EasyAIoT is not actually one project; it is six distinct projects.
 </p>
 
 <p style="font-size: 14px; line-height: 1.8; color: #555; margin: 15px 0;">
@@ -203,7 +203,7 @@ EasyAIoT actively responds to localization strategies, providing comprehensive s
 ## 🧩 Project Structure
 
 <p style="font-size: 15px; line-height: 1.8; color: #333; margin: 15px 0;">
-EasyAIoT consists of five core projects:
+EasyAIoT consists of six core projects:
 </p>
 
 <table style="width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 14px;">
@@ -226,6 +226,20 @@ EasyAIoT consists of five core projects:
     <li><strong>Device Authentication</strong>: Device dynamic registration, identity authentication, secure access</li>
     <li><strong>Rule Engine</strong>: Data flow rules, message routing, data transformation</li>
     <li><strong>Data Collection</strong>: Device data collection, storage, query, and analysis</li>
+    <li><strong>Node Control Plane</strong>: Built-in <code>iot-node</code> microservice providing unified control plane for compute/media node CRUD, SSH connectivity testing, Agent registration and heartbeat, workload scheduling, and media node pool allocation</li>
+  </ul>
+</td>
+</tr>
+<tr>
+<td style="padding: 15px; border: 1px solid #e0e0e0; vertical-align: top;"><strong>NODE Module</strong></td>
+<td style="padding: 15px; border: 1px solid #e0e0e0; line-height: 1.8; color: #444;">
+  <ul style="margin: 5px 0; padding-left: 20px;">
+    <li><strong>Node Agent</strong>: Python-based edge/remote node Agent; one-click install via <code>install.sh</code> as a systemd service, automatically joining the platform when deployed on target servers</li>
+    <li><strong>Control Plane Communication</strong>: Registers with the <code>iot-node</code> control plane and sends periodic heartbeats, reporting CPU, memory, disk, GPU utilization, and active workload status in real time</li>
+    <li><strong>Remote Workloads</strong>: Receives deploy/stop commands from the control plane via HTTP API (default port 9100), launching AI model services, algorithm tasks, FFmpeg transcoding, and other workloads locally on the node</li>
+    <li><strong>Media Node Pool</strong>: Supports remote <code>docker compose</code> deployment of SRS/ZLM streaming stacks on nodes, working with the control plane for sticky device-to-media-node binding and stream URL generation</li>
+    <li><strong>Node Roles</strong>: Supports compute, media, and hybrid roles, enabling cross-node scheduling and elastic scaling for AI inference, algorithm tasks, and streaming services</li>
+    <li><strong>Offline-Friendly</strong>: Provides pip wheels offline dependency bundling and Agent hot-update capabilities, suitable for batch node onboarding in air-gapped or restricted network environments</li>
   </ul>
 </td>
 </tr>

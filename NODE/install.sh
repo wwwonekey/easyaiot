@@ -6,14 +6,16 @@
 #
 # 命令:
 #   install    安装/更新 Agent 并启动服务（默认）
+#   update     仅同步源码并重启（不重装依赖）
 #   start      启动 Agent 服务
 #   stop       停止 Agent 服务
-#   restart    重启 Agent 服务
+#   restart    重启 Agent 服务（不更新代码）
 #   status     查看服务状态
 #   logs       查看最近日志（logs -f 实时跟踪）
 #   clean      停止服务并清理 Agent
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="${INSTALL_DIR:-/opt/easyaiot/node-agent}"
 SERVICE_NAME="${SERVICE_NAME:-easyaiot-node-agent}"
 PYTHON="${PYTHON:-python3}"
@@ -27,9 +29,10 @@ usage() {
 
 命令:
   install    安装/更新 Agent 并启动服务（默认）
+  update     仅同步源码并重启（不重装依赖）
   start      启动 Agent 服务
   stop       停止 Agent 服务
-  restart    重启 Agent 服务
+  restart    重启 Agent 服务（不更新代码）
   status     查看服务状态
   logs       查看最近日志（logs -f 实时跟踪）
   clean      停止服务并清理 Agent
@@ -119,6 +122,33 @@ cmd_logs() {
   fi
 }
 
+sync_agent_sources() {
+  local resolved_install_dir
+  resolved_install_dir="$(readlink -f "$INSTALL_DIR")"
+  echo "==> 同步 Agent 源码: ${SCRIPT_DIR} -> ${resolved_install_dir}"
+  sudo mkdir -p "$resolved_install_dir"
+  sudo cp "$SCRIPT_DIR/run_agent.py" "$SCRIPT_DIR/agent_server.py" "$SCRIPT_DIR/media_manager.py" \
+    "$SCRIPT_DIR/workload_manager.py" "$SCRIPT_DIR/requirements.txt" \
+    "$SCRIPT_DIR/agent.env.example" "$SCRIPT_DIR/install.sh" "$resolved_install_dir/"
+  sudo chmod +x "$resolved_install_dir/install.sh"
+  if [ -d "$SCRIPT_DIR/pip-wheels" ]; then
+    sudo rm -rf "$resolved_install_dir/pip-wheels"
+    sudo mkdir -p "$resolved_install_dir/pip-wheels"
+    sudo cp -a "$SCRIPT_DIR/pip-wheels/." "$resolved_install_dir/pip-wheels/"
+  fi
+  if [ -f "$SCRIPT_DIR/get-pip.py" ]; then
+    sudo cp "$SCRIPT_DIR/get-pip.py" "$resolved_install_dir/"
+  fi
+  if [ -f "$SCRIPT_DIR/agent.env" ] && [ ! -f "$resolved_install_dir/agent.env" ]; then
+    sudo cp "$SCRIPT_DIR/agent.env" "$resolved_install_dir/"
+  fi
+}
+
+cmd_update() {
+  sync_agent_sources
+  cmd_restart
+}
+
 cmd_clean() {
   echo "==> 清理 ${SERVICE_NAME}"
   if service_installed; then
@@ -140,25 +170,9 @@ cmd_clean() {
 do_install() {
   echo "==> 安装目录: $INSTALL_DIR"
   echo "==> Python: $PYTHON ($($PYTHON --version 2>&1))"
-  sudo mkdir -p "$INSTALL_DIR"
-  local resolved_install_dir resolved_pwd
+  sync_agent_sources
+  local resolved_install_dir
   resolved_install_dir="$(readlink -f "$INSTALL_DIR")"
-  resolved_pwd="$(readlink -f "$(pwd)")"
-  if [ "$resolved_pwd" != "$resolved_install_dir" ]; then
-    sudo cp run_agent.py agent_server.py media_manager.py workload_manager.py requirements.txt agent.env.example install.sh "$INSTALL_DIR/"
-    sudo chmod +x "$INSTALL_DIR/install.sh"
-    if [ -d "$resolved_pwd/pip-wheels" ]; then
-      sudo rm -rf "$INSTALL_DIR/pip-wheels"
-      sudo mkdir -p "$INSTALL_DIR/pip-wheels"
-      sudo cp -a "$resolved_pwd/pip-wheels/." "$INSTALL_DIR/pip-wheels/"
-    fi
-    if [ -f "$resolved_pwd/get-pip.py" ]; then
-      sudo cp "$resolved_pwd/get-pip.py" "$INSTALL_DIR/"
-    fi
-    if [ -f "$resolved_pwd/agent.env" ]; then
-      sudo cp "$resolved_pwd/agent.env" "$INSTALL_DIR/"
-    fi
-  fi
   cd "$resolved_install_dir"
   local WHEELS_DIR="$resolved_install_dir/pip-wheels"
   if [ ! -d "$WHEELS_DIR" ] || ! compgen -G "$WHEELS_DIR"/*.{whl,tar.gz,zip} >/dev/null 2>&1; then
@@ -381,6 +395,9 @@ main() {
   case "$action" in
     install)
       do_install
+      ;;
+    update)
+      cmd_update
       ;;
     start)
       cmd_start

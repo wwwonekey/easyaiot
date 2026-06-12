@@ -15,6 +15,7 @@ import {
   NODE_TERM,
   loadNodeControlPlaneUrlAsync,
   saveNodeControlPlaneUrl,
+  readMediaPortsFromTags,
 } from '../../utils/constants';
 import { mediaDetailSchema, nodeSetupSummarySchema } from '../../Data';
 import NodeMetaBadge from '../NodeMetaBadge/index.vue';
@@ -76,14 +77,7 @@ const mediaFormValues = computed(() => {
     sshCredentialConfigured: current.sshCredentialConfigured,
     sshLastTestOk: current.sshLastTestOk,
     sshPort: current.sshPort,
-    srsRtmpPort: tags.srs_rtmp_port ? Number(tags.srs_rtmp_port) : 1935,
-    srsHttpPort: tags.srs_http_port ? Number(tags.srs_http_port) : 8080,
-    srsApiPort: tags.srs_api_port ? Number(tags.srs_api_port) : 1985,
-    zlmHttpPort: tags.zlm_http_port ? Number(tags.zlm_http_port) : 6080,
-    zlmRtmpPort: tags.zlm_rtmp_port ? Number(tags.zlm_rtmp_port) : 10935,
-    zlmRtspPort: tags.zlm_rtsp_port ? Number(tags.zlm_rtsp_port) : 8554,
-    zlmRtpPortMin: tags.zlm_rtp_port_min ? Number(tags.zlm_rtp_port_min) : 30000,
-    zlmRtpPortMax: tags.zlm_rtp_port_max ? Number(tags.zlm_rtp_port_max) : 30500,
+    ...readMediaPortsFromTags(tags),
   };
 });
 

@@ -4,7 +4,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EASYAIOT_ROOT="$(cd "${ROOT}/.." && pwd)"
-WHEELS_DIR="${ROOT}/pip-wheels"
+# 支持 iot-node 在 install 目录不可写时指定缓存路径（AGENT_PIP_WHEELS_DIR）
+WHEELS_DIR="${AGENT_PIP_WHEELS_DIR:-${ROOT}/pip-wheels}"
 REQ_FILE="${ROOT}/requirements.txt"
 REQ_PY39_EXTRAS="${ROOT}/requirements-py39-extras.txt"
 PYPI_INDEX="${PYPI_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}"

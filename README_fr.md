@@ -140,7 +140,7 @@ En s'appuyant de manière innovante sur les grands modèles, nous construisons u
 ### 🏗️ Caractéristiques de l'architecture du projet
 
 <p style="font-size: 14px; line-height: 1.8; color: #555; margin: 15px 0;">
-EasyAIoT n'est pas vraiment un seul projet, mais cinq projets distincts.
+EasyAIoT n'est pas vraiment un seul projet, mais six projets distincts.
 </p>
 
 <p style="font-size: 14px; line-height: 1.8; color: #555; margin: 15px 0;">
@@ -203,7 +203,7 @@ EasyAIoT répond activement à la stratégie de localisation, prenant pleinement
 ## 🧩 Structure du projet
 
 <p style="font-size: 15px; line-height: 1.8; color: #333; margin: 15px 0;">
-EasyAIoT est composé de cinq projets principaux :
+EasyAIoT est composé de six projets principaux :
 </p>
 
 <table style="width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 14px;">
@@ -226,6 +226,20 @@ EasyAIoT est composé de cinq projets principaux :
     <li><strong>Authentification des appareils</strong> : Enregistrement dynamique, authentification d'identité, connexion sécurisée.</li>
     <li><strong>Moteur de règles</strong> : Règles de flux de données, routage des messages, transformation des données.</li>
     <li><strong>Collecte de données</strong> : Collecte, stockage, requête et analyse des données des appareils.</li>
+    <li><strong>Plan de contrôle des nœuds</strong> : Microservice <code>iot-node</code> intégré offrant un plan de contrôle unifié pour le CRUD des nœuds de calcul/média, les tests de connectivité SSH, l'enregistrement et le heartbeat des Agents, l'ordonnancement des charges de travail et l'allocation du pool de nœuds média.</li>
+  </ul>
+</td>
+</tr>
+<tr>
+<td style="padding: 15px; border: 1px solid #e0e0e0; vertical-align: top;"><strong>Module NODE</strong></td>
+<td style="padding: 15px; border: 1px solid #e0e0e0; line-height: 1.8; color: #444;">
+  <ul style="margin: 5px 0; padding-left: 20px;">
+    <li><strong>Agent de nœud</strong> : Agent de nœud edge/distant basé sur Python ; installation en un clic via <code>install.sh</code> en tant que service systemd, rejoignant automatiquement la plateforme une fois déployé sur les serveurs cibles.</li>
+    <li><strong>Communication avec le plan de contrôle</strong> : S'enregistre auprès du plan de contrôle <code>iot-node</code> et envoie des heartbeats périodiques, rapportant en temps réel l'utilisation CPU, mémoire, disque, GPU et l'état des charges de travail actives.</li>
+    <li><strong>Charges de travail distantes</strong> : Reçoit les commandes de déploiement/arrêt du plan de contrôle via l'API HTTP (port 9100 par défaut), lançant localement sur le nœud les services de modèles IA, tâches algorithmiques, transcodage FFmpeg et autres charges de travail.</li>
+    <li><strong>Pool de nœuds média</strong> : Prend en charge le déploiement distant <code>docker compose</code> des piles de streaming SRS/ZLM sur les nœuds, en collaboration avec le plan de contrôle pour la liaison sticky appareil-nœud média et la génération d'URL de flux.</li>
+    <li><strong>Rôles de nœud</strong> : Prend en charge les rôles compute (calcul), media (média) et hybrid (mixte), permettant l'ordonnancement inter-nœuds et la mise à l'échelle élastique pour l'inférence IA, les tâches algorithmiques et les services de streaming.</li>
+    <li><strong>Compatible hors ligne</strong> : Fournit l'empaquetage hors ligne des dépendances pip wheels et la mise à jour à chaud de l'Agent, adapté à l'intégration en masse de nœuds dans des environnements sans accès Internet ou à réseau restreint.</li>
   </ul>
 </td>
 </tr>

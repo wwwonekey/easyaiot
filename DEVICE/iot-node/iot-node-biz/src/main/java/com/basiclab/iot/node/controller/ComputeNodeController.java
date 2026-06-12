@@ -14,7 +14,7 @@ import com.basiclab.iot.common.core.aop.TenantIgnore;
 import com.basiclab.iot.node.domain.vo.PlatformAgentBootstrapRespVO;
 import com.basiclab.iot.node.domain.vo.PlatformHostRespVO;
 import com.basiclab.iot.node.service.ComputeNodeService;
-import com.basiclab.iot.node.util.HostIpUtil;
+import com.basiclab.iot.node.service.ControlPlaneEndpointResolver;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -35,6 +35,8 @@ public class ComputeNodeController {
 
     @Resource
     private ComputeNodeService computeNodeService;
+    @Resource
+    private ControlPlaneEndpointResolver controlPlaneEndpointResolver;
 
     @PostMapping("/create")
     @Operation(summary = "创建服务器节点")
@@ -100,7 +102,9 @@ public class ComputeNodeController {
     @GetMapping("/platform-host")
     @Operation(summary = "获取平台宿主机 IP（供 Agent 平台接入地址自动填充）")
     public CommonResult<PlatformHostRespVO> getPlatformHost() {
-        return success(new PlatformHostRespVO(HostIpUtil.detectHostIp(), 48080));
+        return success(new PlatformHostRespVO(
+                controlPlaneEndpointResolver.resolveHookHost(),
+                controlPlaneEndpointResolver.resolveHookPort()));
     }
 
     @GetMapping("/platform-agent-bootstrap")
