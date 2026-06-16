@@ -57,6 +57,7 @@ def allocate_node(
     region: Optional[str] = None,
     sticky: bool = True,
     target_node_id: Optional[int] = None,
+    exclude_node_ids: Optional[list] = None,
 ) -> Dict[str, Any]:
     """调度分配节点。指定 target_node_id 时直接返回该节点（不经过评分）。"""
     if target_node_id:
@@ -69,15 +70,19 @@ def allocate_node(
             'bindingId': None,
         }
 
+    requirements: Dict[str, Any] = {
+        'capabilities': capabilities or ['ai_inference'],
+        'gpuCount': gpu_count,
+        'region': region,
+    }
+    if exclude_node_ids:
+        requirements['excludeNodeIds'] = exclude_node_ids
+
     payload = {
         'workloadType': workload_type,
         'workloadId': workload_id,
         'sticky': sticky,
-        'requirements': {
-            'capabilities': capabilities or ['ai_inference'],
-            'gpuCount': gpu_count,
-            'region': region,
-        },
+        'requirements': requirements,
     }
     return _post('/scheduler/allocate', payload)
 

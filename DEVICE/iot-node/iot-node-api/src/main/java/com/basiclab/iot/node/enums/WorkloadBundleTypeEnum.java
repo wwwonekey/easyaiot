@@ -13,7 +13,8 @@ public enum WorkloadBundleTypeEnum {
     STREAM_FORWARD("stream_forward", "推流转发", "VIDEO"),
     ALGORITHM_REALTIME("algorithm_realtime", "实时算法", "VIDEO"),
     ALGORITHM_SNAP("algorithm_snap", "抓拍算法", "VIDEO"),
-    AI_SERVICE("ai_service", "模型服务", "AI");
+    AI_SERVICE("ai_service", "模型服务", "AI"),
+    AUTO_LABEL("auto_label", "自动标注 Worker", "AI");
 
     private final String type;
     private final String label;

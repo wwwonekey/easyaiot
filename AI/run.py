@@ -295,6 +295,10 @@ def create_app():
                 ensure_train_task_dataset_columns,
                 ensure_auto_label_task_model_id_column,
                 ensure_auto_label_task_sam_columns,
+                ensure_auto_label_task_pipeline_column,
+                ensure_auto_label_task_cluster_columns,
+                ensure_auto_label_subtask_table,
+                AutoLabelSubTask,
             )
             db.create_all()
             ensure_model_table_status_column(db.engine)
@@ -303,6 +307,9 @@ def create_app():
             ensure_train_task_dataset_columns(db.engine)
             ensure_auto_label_task_model_id_column(db.engine)
             ensure_auto_label_task_sam_columns(db.engine)
+            ensure_auto_label_task_pipeline_column(db.engine)
+            ensure_auto_label_task_cluster_columns(db.engine)
+            ensure_auto_label_subtask_table(db.engine)
             print(f"✅ 数据库连接成功，表结构已创建/验证")
         except Exception as e:
             error_msg = str(e)
@@ -316,8 +323,9 @@ def create_app():
 
     # 注册蓝图（延迟导入，避免在环境变量加载前就导入）
     try:
-        from app.blueprints import export, inference, model, train, train_task, llm, ocr, speech, deploy, auto_label, plate, sam
+        from app.blueprints import export, inference, model, train, train_task, llm, ocr, speech, deploy, auto_label, plate, sam, minio_proxy
         
+        app.register_blueprint(minio_proxy.minio_proxy_bp)
         app.register_blueprint(export.export_bp, url_prefix='/model/export')
         app.register_blueprint(inference.inference_task_bp, url_prefix='/model/inference_task')
         app.register_blueprint(model.model_bp, url_prefix='/model')
@@ -351,6 +359,14 @@ def create_app():
                 print(f'✅ 已将 {recovered} 个因服务重启中断的训练任务标记为失败')
         except Exception as e:
             print(f'⚠️  恢复中断训练任务失败: {str(e)}')
+
+        # 启动自动标注队列调度器
+        try:
+            from app.services.auto_label_cluster_service import start_auto_label_queue_coordinator
+            start_auto_label_queue_coordinator(app)
+            print('✅ 自动标注队列调度器已启动')
+        except Exception as e:
+            print(f'⚠️  启动自动标注队列调度器失败: {str(e)}')
     except Exception as e:
         print(f"❌ 蓝图注册失败: {str(e)}")
         import traceback

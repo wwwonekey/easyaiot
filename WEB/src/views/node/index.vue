@@ -24,6 +24,7 @@
 
 <script lang="ts" setup>
 import { reactive } from 'vue';
+import { useRoute } from 'vue-router';
 import { TabPane, Tabs } from 'ant-design-vue';
 import ClusterDashboard from './components/ClusterDashboard/index.vue';
 import NodeManage from './components/NodeManage/index.vue';
@@ -32,8 +33,10 @@ import { NODE_PAGE } from './utils/constants';
 
 defineOptions({ name: 'ComputeNodeIndex' });
 
+const route = useRoute();
+
 const state = reactive({
-  activeKey: '1',
+  activeKey: String(route.query.tab || '1'),
 });
 
 function handleTabClick(activeKey: string) {

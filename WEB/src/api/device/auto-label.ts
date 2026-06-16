@@ -66,6 +66,66 @@ export const startAutoLabel = (datasetId: number, data: StartAutoLabelParams | R
   return commonApi('post', `${Api.AutoLabel}/dataset/${datasetId}/auto-label/start`, { data });
 };
 
+export interface AutoLabelStrategy {
+  bootstrap_sam_limit?: number;
+  yolo_iterate_every?: number;
+  auto_train_yolo?: boolean;
+  skip_sam_cold_start?: boolean;
+  initial_model_id?: number | null;
+  /** 自动训练微调基座（模型管理）；不填则首轮用 model_arch */
+  pretrain_model_id?: number | null;
+  /** 官方预训练：yolo26n / yolo11n / yolov8n（内置） */
+  model_arch?: string;
+  sam_supplement_enabled?: boolean;
+  sam_supplement_until_labeled?: number;
+  sam_supplement_stop_map?: number;
+  sam_supplement_min_detections?: number;
+  yolo_confidence?: number;
+  sam_confidence?: number;
+}
+
+export interface StartSamPipelineParams {
+  text_prompts: string[];
+  duration_hours?: number;
+  capture_interval_sec?: number;
+  confidence_threshold?: number;
+  annotation_type?: 'rectangle' | 'polygon';
+  return_masks?: boolean;
+  auto_export?: boolean;
+  train_ratio?: number;
+  val_ratio?: number;
+  test_ratio?: number;
+  execution_mode?: 'local' | 'cluster';
+  frame_task_ids?: number[];
+  queue_priority?: number;
+  strategy?: AutoLabelStrategy;
+  model_id?: number;
+}
+
+export const startSamPipeline = (datasetId: number, data: StartSamPipelineParams) => {
+  return commonApi('post', `${Api.AutoLabel}/dataset/${datasetId}/auto-label/pipeline/start`, { data });
+};
+
+export const getAutoLabelSubtasks = (datasetId: number, taskId: number) => {
+  return commonApi('get', `${Api.AutoLabel}/dataset/${datasetId}/auto-label/task/${taskId}/subtasks`);
+};
+
+export const getAutoLabelQueue = (datasetId: number, params: Record<string, unknown> = {}) => {
+  return commonApi('get', `${Api.AutoLabel}/dataset/${datasetId}/auto-label/queue`, { params });
+};
+
+export const pauseAutoLabelTask = (datasetId: number, taskId: number) => {
+  return commonApi('post', `${Api.AutoLabel}/dataset/${datasetId}/auto-label/task/${taskId}/pause`);
+};
+
+export const resumeAutoLabelTask = (datasetId: number, taskId: number) => {
+  return commonApi('post', `${Api.AutoLabel}/dataset/${datasetId}/auto-label/task/${taskId}/resume`);
+};
+
+export const cancelAutoLabelTask = (datasetId: number, taskId: number) => {
+  return commonApi('post', `${Api.AutoLabel}/dataset/${datasetId}/auto-label/task/${taskId}/cancel`);
+};
+
 export const startSamBootstrap = (datasetId: number, data: StartSamBootstrapParams) => {
   return commonApi('post', `${Api.AutoLabel}/dataset/${datasetId}/auto-label/bootstrap/start`, { data });
 };

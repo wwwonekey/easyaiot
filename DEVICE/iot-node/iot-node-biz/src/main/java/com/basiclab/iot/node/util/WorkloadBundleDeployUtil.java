@@ -94,6 +94,8 @@ public final class WorkloadBundleDeployUtil {
                         "app",
                         "services/ai_service"
                 );
+            case AUTO_LABEL:
+                return syncAutoLabelRelativePaths();
             default:
                 return Collections.emptyList();
         }
@@ -110,6 +112,8 @@ public final class WorkloadBundleDeployUtil {
                 return "services/snapshot_algorithm_service/run_deploy.py";
             case AI_SERVICE:
                 return "services/ai_service/run_deploy.py";
+            case AUTO_LABEL:
+                return "services/auto_label_worker/run_worker.py";
             default:
                 return "";
         }
@@ -177,7 +181,17 @@ public final class WorkloadBundleDeployUtil {
     }
 
     public static boolean requiresAiSync(String workloadType) {
-        return WorkloadBundleTypeEnum.AI_SERVICE.getType().equals(
-                workloadType == null ? "" : workloadType.trim().toLowerCase(Locale.ROOT));
+        String t = workloadType == null ? "" : workloadType.trim().toLowerCase(Locale.ROOT);
+        return WorkloadBundleTypeEnum.AI_SERVICE.getType().equals(t)
+                || WorkloadBundleTypeEnum.AUTO_LABEL.getType().equals(t);
+    }
+
+    /** 自动标注 Worker 需同步的源码路径（相对 AI 根目录） */
+    public static List<String> syncAutoLabelRelativePaths() {
+        return Arrays.asList(
+                "db_models.py",
+                "app",
+                "services/auto_label_worker"
+        );
     }
 }

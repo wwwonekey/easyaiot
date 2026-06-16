@@ -276,6 +276,15 @@ export const WORKLOAD_BUNDLE_TYPES = [
     scriptMarker: 'services/ai_service/run_deploy.py',
     desc: '批量分发模型服务 run_deploy.py 及离线运行时（flask/onnxruntime/ultralytics 等）',
   },
+  {
+    key: 'auto_label',
+    label: '自动标注 Worker',
+    module: 'AI',
+    remoteRoot: '/opt/easyaiot/AI',
+    pythonLauncher: '/opt/easyaiot/AI/.bundles/ai_service/run-python.sh',
+    scriptMarker: 'services/auto_label_worker/run_worker.py',
+    desc: '分发自动标注 Worker（SAM 辅助 + YOLO 量产），集群智能标注流水线必需',
+  },
 ] as const;
 
 export type WorkloadBundleType = (typeof WORKLOAD_BUNDLE_TYPES)[number]['key'];

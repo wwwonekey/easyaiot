@@ -44,6 +44,7 @@
 
 <script lang="ts" setup>
 import { onMounted, ref } from 'vue';
+import { useRoute } from 'vue-router';
 import { Alert, Select, TabPane, Tabs } from 'ant-design-vue';
 import { Button } from '@/components/Button';
 import { CollapseContainer } from '@/components/Container';
@@ -55,10 +56,14 @@ import FfmpegBatchPanel from './FfmpegBatchPanel.vue';
 
 defineOptions({ name: 'WorkloadBundleBatch' });
 
+const route = useRoute();
 const nodesLoading = ref(false);
 const nodeList = ref<ComputeNodeVO[]>([]);
 const selectedNodeIds = ref<number[]>([]);
-const activeBundleKey = ref(WORKLOAD_BUNDLE_TYPES[0].key);
+const bundleFromQuery = String(route.query.bundle || '');
+const defaultBundle = WORKLOAD_BUNDLE_TYPES.find((b) => b.key === bundleFromQuery)?.key
+  || WORKLOAD_BUNDLE_TYPES[0].key;
+const activeBundleKey = ref(defaultBundle);
 
 const nodeOptions = ref<Array<{ label: string; value: number; disabled?: boolean }>>([]);
 

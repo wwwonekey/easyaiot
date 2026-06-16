@@ -10,8 +10,11 @@ import logging
 import tempfile
 import threading
 import random
+import time
+import io
+import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timedelta
 import requests
 from flask import Blueprint, request, jsonify, Response
 from sqlalchemy import text
@@ -71,7 +74,51 @@ def _fetch_all_dataset_images(java_backend_url: str, dataset_id: int, extra_para
 
 
 def _dataset_java_base() -> str:
-    return os.getenv('JAVA_BACKEND_URL', 'http://localhost:8080').rstrip('/')
+    return os.getenv(
+        'JAVA_BACKEND_URL',
+        os.getenv('GATEWAY_URL', 'http://localhost:48080'),
+    ).rstrip('/')
+
+
+def _find_active_task(dataset_id: int) -> AutoLabelTask | None:
+    return AutoLabelTask.query.filter_by(dataset_id=dataset_id).filter(
+        AutoLabelTask.status.in_(['PENDING', 'PROCESSING'])
+    ).order_by(AutoLabelTask.created_at.desc()).first()
+
+
+def _active_task_conflict_response(active: AutoLabelTask):
+    return jsonify({
+        'code': 409,
+        'msg': f'已有进行中的任务 #{active.id}，请等待完成或在任务面板查看进度',
+        'data': {'task_id': active.id, 'status': active.status},
+    }), 409
+
+
+def _parse_pipeline_config(task: AutoLabelTask) -> dict:
+    if not task.pipeline_config:
+        return {}
+    try:
+        cfg = json.loads(task.pipeline_config) if isinstance(task.pipeline_config, str) else task.pipeline_config
+        return cfg if isinstance(cfg, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_pipeline_config(task: AutoLabelTask, updates: dict) -> dict:
+    cfg = _parse_pipeline_config(task)
+    cfg.update(updates)
+    if 'logs' in cfg and isinstance(cfg['logs'], list):
+        cfg['logs'] = cfg['logs'][-80:]
+    task.pipeline_config = json.dumps(cfg, ensure_ascii=False)
+    return cfg
+
+
+def _pipeline_log(task: AutoLabelTask, message: str) -> None:
+    cfg = _parse_pipeline_config(task)
+    logs = cfg.get('logs') if isinstance(cfg.get('logs'), list) else []
+    logs.append({'time': datetime.now().isoformat(timespec='seconds'), 'message': message})
+    _save_pipeline_config(task, {'logs': logs})
+    logger.info(f'[pipeline task={task.id}] {message}')
 
 
 def _dataset_annotation_url(dataset_id: int, suffix: str) -> str:
@@ -151,6 +198,10 @@ def _proxy_dataset_json_response(resp: requests.Response):
 def start_auto_label(dataset_id):
     """启动自动化标注任务（YOLO 直连 / SAM 开放词汇）"""
     try:
+        active = _find_active_task(dataset_id)
+        if active:
+            return _active_task_conflict_response(active)
+
         data = request.json or {}
         label_mode = (data.get('label_mode') or 'yolo').lower()
         confidence_threshold = float(data.get('confidence_threshold', 0.5 if label_mode == 'yolo' else 0.45))
@@ -215,6 +266,10 @@ def start_auto_label(dataset_id):
 def start_bootstrap_auto_label(dataset_id):
     """SAM 冷启动批量标注（首批 N 张）"""
     try:
+        active = _find_active_task(dataset_id)
+        if active:
+            return _active_task_conflict_response(active)
+
         data = request.json or {}
         text_prompts = data.get('text_prompts') or []
         if not text_prompts:
@@ -262,12 +317,266 @@ def start_bootstrap_auto_label(dataset_id):
         return jsonify({'code': 500, 'msg': f'启动失败: {str(e)}'}), 500
 
 
+@auto_label_bp.route('/dataset/<int:dataset_id>/auto-label/pipeline/start', methods=['POST'])
+def start_pipeline_auto_label(dataset_id):
+    """无人值守流水线：摄像头采集 → SAM 标注 → 自动打包（支持本机/集群队列）"""
+    try:
+        data = request.json or {}
+        execution_mode = (data.get('execution_mode') or 'local').lower()
+        frame_task_ids = data.get('frame_task_ids') or []
+
+        if execution_mode == 'local':
+            active = _find_active_task(dataset_id)
+            if active:
+                return _active_task_conflict_response(active)
+
+        text_prompts = data.get('text_prompts') or []
+        if not text_prompts:
+            return jsonify({'code': 400, 'msg': '请提供检测类别词 text_prompts'}), 400
+
+        sam_svc = get_sam_service()
+        if not sam_svc.enabled and execution_mode == 'local':
+            return jsonify({'code': 503, 'msg': 'SAM 未启用，请设置 SAM_ENABLED=true'}), 503
+
+        duration_hours = max(1, min(48, int(data.get('duration_hours', 8))))
+        capture_interval_sec = max(5, min(600, int(data.get('capture_interval_sec', 30))))
+        annotation_type = data.get('annotation_type', 'rectangle')
+        confidence_threshold = float(data.get('confidence_threshold', 0.45))
+        return_masks = bool(data.get('return_masks', annotation_type == 'polygon'))
+        auto_export = bool(data.get('auto_export', True))
+        queue_priority = int(data.get('queue_priority', 0))
+
+        java_url = _dataset_java_base()
+        all_frame_tasks = _fetch_frame_tasks(java_url, dataset_id)
+        if frame_task_ids:
+            id_set = {int(x) for x in frame_task_ids}
+            selected_tasks = [ft for ft in all_frame_tasks if int(ft.get('id', 0)) in id_set]
+        else:
+            selected_tasks = all_frame_tasks
+
+        if execution_mode == 'cluster' and not selected_tasks:
+            return jsonify({
+                'code': 400,
+                'msg': '集群模式需至少选择一个摄像头（帧捕获任务），请先在数据来源中配置',
+            }), 400
+
+        from app.services.auto_label_orchestrator import init_pipeline_strategy
+        strategy_raw = data.get('strategy') or {
+            'bootstrap_sam_limit': int(data.get('bootstrap_sam_limit', 200)),
+            'yolo_iterate_every': int(data.get('yolo_iterate_every', 500)),
+            'auto_train_yolo': bool(data.get('auto_train_yolo', True)),
+            'initial_model_id': data.get('initial_model_id') or data.get('model_id'),
+            'skip_sam_cold_start': bool(data.get('skip_sam_cold_start', False)),
+            'sam_supplement_enabled': bool(data.get('sam_supplement_enabled', True)),
+            'sam_supplement_until_labeled': int(data.get('sam_supplement_until_labeled', 500)),
+            'sam_supplement_stop_map': float(data.get('sam_supplement_stop_map', 0)),
+            'sam_supplement_min_detections': int(data.get('sam_supplement_min_detections', 1)),
+            'pretrain_model_id': data.get('pretrain_model_id'),
+            'model_arch': data.get('model_arch', '@AI/yolo26n.pt'),
+            'yolo_confidence': float(data.get('yolo_confidence', 0.5)),
+            'sam_confidence': confidence_threshold,
+        }
+
+        pipeline_config = {
+            'duration_hours': duration_hours,
+            'capture_interval_sec': capture_interval_sec,
+            'auto_export': auto_export,
+            'export_train_ratio': float(data.get('train_ratio', 0.7)),
+            'export_val_ratio': float(data.get('val_ratio', 0.2)),
+            'export_test_ratio': float(data.get('test_ratio', 0.1)),
+            'pipeline_status': 'queued' if execution_mode == 'cluster' else 'pending',
+            'captured_count': 0,
+            'labeled_count': 0,
+            'packaged': False,
+            'camera_count': len(selected_tasks),
+        }
+
+        task = AutoLabelTask(
+            dataset_id=dataset_id,
+            confidence_threshold=confidence_threshold,
+            label_mode='smart',
+            text_prompts=json.dumps(text_prompts, ensure_ascii=False),
+            annotation_type=annotation_type,
+            phase='PIPELINE',
+            bootstrap_selection='unlabeled_only',
+            return_masks=return_masks,
+            execution_mode=execution_mode,
+            queue_priority=queue_priority,
+            selected_frame_task_ids=json.dumps([ft.get('id') for ft in selected_tasks], ensure_ascii=False),
+            status='PENDING',
+            model_id=int(strategy_raw['initial_model_id']) if strategy_raw.get('initial_model_id') else None,
+        )
+        init_pipeline_strategy(task, strategy_raw)
+        state = json.loads(task.pipeline_config)
+        state.update(pipeline_config)
+        task.pipeline_config = json.dumps(state, ensure_ascii=False)
+        db.session.add(task)
+        db.session.commit()
+
+        from flask import current_app
+        from app.services.auto_label_orchestrator import maybe_kickoff_skip_sam_pipeline
+        app = current_app._get_current_object()
+        maybe_kickoff_skip_sam_pipeline(task, app)
+
+        if execution_mode == 'cluster':
+            from app.services.auto_label_cluster_service import (
+                create_camera_subtasks,
+                start_cluster_pipeline,
+            )
+            create_camera_subtasks(task, selected_tasks, json.loads(task.pipeline_config))
+            db.session.commit()
+            thread = threading.Thread(target=start_cluster_pipeline, args=(app, task.id))
+            thread.daemon = True
+            thread.start()
+            msg = f'集群流水线已入队，{len(selected_tasks)} 路摄像头将按负载均衡分发到计算节点'
+        else:
+            thread = threading.Thread(target=execute_pipeline_task, args=(app, task.id))
+            thread.daemon = True
+            thread.start()
+            msg = '无人值守流水线已启动（本机模式）'
+
+        return jsonify({
+            'code': 0,
+            'msg': msg,
+            'data': {
+                'task_id': task.id,
+                'execution_mode': execution_mode,
+                'camera_count': len(selected_tasks),
+                'duration_hours': duration_hours,
+                'capture_interval_sec': capture_interval_sec,
+            },
+        })
+    except Exception as e:
+        logger.error(f'启动无人值守流水线失败: {str(e)}', exc_info=True)
+        db.session.rollback()
+        return jsonify({'code': 500, 'msg': f'启动失败: {str(e)}'}), 500
+
+
+@auto_label_bp.route('/dataset/<int:dataset_id>/auto-label/task/<int:task_id>/subtasks', methods=['GET'])
+def list_auto_label_subtasks(dataset_id, task_id):
+    """获取任务的摄像头子任务列表（含节点分配与进度）"""
+    try:
+        from db_models import AutoLabelSubTask
+        task = AutoLabelTask.query.filter_by(id=task_id, dataset_id=dataset_id).first()
+        if not task:
+            return jsonify({'code': 404, 'msg': '任务不存在'}), 404
+        subtasks = (
+            AutoLabelSubTask.query.filter_by(parent_task_id=task_id)
+            .order_by(AutoLabelSubTask.queue_position.asc(), AutoLabelSubTask.id.asc())
+            .all()
+        )
+        return jsonify({
+            'code': 0,
+            'msg': '获取成功',
+            'data': {
+                'task': task.to_dict(),
+                'subtasks': [s.to_dict() for s in subtasks],
+            },
+        })
+    except Exception as e:
+        logger.error(f'获取子任务列表失败: {str(e)}', exc_info=True)
+        return jsonify({'code': 500, 'msg': str(e)}), 500
+
+
+@auto_label_bp.route('/dataset/<int:dataset_id>/auto-label/queue', methods=['GET'])
+def list_auto_label_queue(dataset_id):
+    """获取数据集自动标注任务队列（含集群子任务摘要）"""
+    try:
+        from db_models import AutoLabelSubTask
+        page = int(request.args.get('page', 1))
+        page_size = int(request.args.get('page_size', 20))
+        status_filter = request.args.get('status')
+
+        query = AutoLabelTask.query.filter_by(dataset_id=dataset_id)
+        if status_filter:
+            query = query.filter(AutoLabelTask.status == status_filter)
+        query = query.order_by(AutoLabelTask.created_at.desc())
+        pagination = query.paginate(page=page, per_page=page_size, error_out=False)
+
+        items = []
+        for task in pagination.items:
+            td = task.to_dict()
+            subtasks = AutoLabelSubTask.query.filter_by(parent_task_id=task.id).all()
+            td['subtask_summary'] = {
+                'total': len(subtasks),
+                'queued': sum(1 for s in subtasks if s.status == 'QUEUED'),
+                'running': sum(1 for s in subtasks if s.status in ('DISPATCHING', 'RUNNING')),
+                'completed': sum(1 for s in subtasks if s.status == 'COMPLETED'),
+                'failed': sum(1 for s in subtasks if s.status == 'FAILED'),
+            }
+            td['nodes'] = list({
+                s.assigned_node_host: s.assigned_node_id
+                for s in subtasks if s.assigned_node_host
+            }.items())
+            items.append(td)
+
+        return jsonify({
+            'code': 0,
+            'msg': '获取成功',
+            'data': {
+                'list': items,
+                'total': pagination.total,
+                'page': page,
+                'page_size': page_size,
+            },
+        })
+    except Exception as e:
+        logger.error(f'获取任务队列失败: {str(e)}', exc_info=True)
+        return jsonify({'code': 500, 'msg': str(e)}), 500
+
+
+@auto_label_bp.route('/auto-label/subtask/<int:subtask_id>/heartbeat', methods=['POST'])
+def auto_label_subtask_heartbeat(subtask_id):
+    """集群 Worker 进度心跳（节点 Agent 下发的 Worker 调用）"""
+    try:
+        from flask import current_app
+        from app.services.auto_label_cluster_service import update_subtask_progress
+        payload = request.json or {}
+        subtask = update_subtask_progress(subtask_id, payload, app=current_app._get_current_object())
+        if not subtask:
+            return jsonify({'code': 404, 'msg': '子任务不存在'}), 404
+        return jsonify({'code': 0, 'msg': 'ok', 'data': subtask.to_dict()})
+    except Exception as e:
+        logger.error(f'子任务心跳失败: {str(e)}', exc_info=True)
+        return jsonify({'code': 500, 'msg': str(e)}), 500
+
+
+@auto_label_bp.route('/dataset/<int:dataset_id>/auto-label/task/<int:task_id>/pause', methods=['POST'])
+def pause_auto_label_task(dataset_id, task_id):
+    from app.services.auto_label_orchestrator import pause_task
+    if not pause_task(task_id):
+        return jsonify({'code': 400, 'msg': '无法暂停该任务'}), 400
+    return jsonify({'code': 0, 'msg': '任务已暂停'})
+
+
+@auto_label_bp.route('/dataset/<int:dataset_id>/auto-label/task/<int:task_id>/resume', methods=['POST'])
+def resume_auto_label_task(dataset_id, task_id):
+    from app.services.auto_label_orchestrator import resume_task
+    if not resume_task(task_id):
+        return jsonify({'code': 400, 'msg': '无法恢复该任务'}), 400
+    from flask import current_app
+    app = current_app._get_current_object()
+    from app.services.auto_label_cluster_service import process_queue_once
+    process_queue_once(app)
+    return jsonify({'code': 0, 'msg': '任务已恢复'})
+
+
+@auto_label_bp.route('/dataset/<int:dataset_id>/auto-label/task/<int:task_id>/cancel', methods=['POST'])
+def cancel_auto_label_task(dataset_id, task_id):
+    from app.services.auto_label_orchestrator import cancel_task
+    if not cancel_task(task_id):
+        return jsonify({'code': 400, 'msg': '无法取消该任务'}), 400
+    return jsonify({'code': 0, 'msg': '任务已取消'})
+
+
 @auto_label_bp.route('/dataset/<int:dataset_id>/auto-label/bootstrap/status', methods=['GET'])
 def bootstrap_status(dataset_id):
     """冷启动进度与训练就绪状态"""
     try:
         task = AutoLabelTask.query.filter_by(
-            dataset_id=dataset_id, phase='BOOTSTRAP'
+            dataset_id=dataset_id,
+        ).filter(
+            AutoLabelTask.phase.in_(['BOOTSTRAP', 'PIPELINE'])
         ).order_by(AutoLabelTask.created_at.desc()).first()
         if not task:
             return jsonify({'code': 0, 'msg': '暂无冷启动任务', 'data': {'has_task': False}})
@@ -389,7 +698,7 @@ def label_single_image(dataset_id, image_id):
         if err:
             return jsonify({'code': 400, 'msg': err}), 400
 
-        java_backend_url = os.getenv('JAVA_BACKEND_URL', 'http://localhost:8080')
+        java_backend_url = _dataset_java_base()
         image_response = requests.get(
             f"{java_backend_url}/admin-api/dataset/image/get",
             params={'id': image_id},
@@ -620,6 +929,311 @@ def _parse_text_prompts(task) -> list:
         return []
 
 
+def _fetch_frame_tasks(java_backend_url: str, dataset_id: int) -> list:
+    """拉取数据集下已配置的视频流帧捕获任务。"""
+    try:
+        resp = requests.get(
+            f'{java_backend_url}/admin-api/dataset/frame-task/page',
+            params={'datasetId': dataset_id, 'pageNo': 1, 'pageSize': 100},
+            timeout=30,
+        )
+        if resp.status_code != 200:
+            logger.warning(f'获取帧捕获任务失败: HTTP {resp.status_code}')
+            return []
+        body = resp.json()
+        if body.get('code') != 0:
+            return []
+        return (body.get('data') or {}).get('list') or []
+    except Exception as e:
+        logger.warning(f'获取帧捕获任务异常: {e}')
+        return []
+
+
+def _capture_stream_frame(stream_url: str, timeout_sec: int = 15) -> bytes | None:
+    """从 RTSP/RTMP 流抓取一帧 JPEG。"""
+    if not stream_url or not stream_url.strip():
+        return None
+    cmd = [
+        'ffmpeg', '-y', '-loglevel', 'error',
+        '-i', stream_url.strip(),
+        '-vframes', '1',
+        '-f', 'image2pipe',
+        '-vcodec', 'mjpeg',
+        'pipe:1',
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, timeout=timeout_sec)
+        if proc.returncode == 0 and proc.stdout:
+            return proc.stdout
+        if proc.stderr:
+            logger.debug(f'ffmpeg stderr: {proc.stderr.decode("utf-8", errors="ignore")[:200]}')
+    except subprocess.TimeoutExpired:
+        logger.warning(f'抽帧超时: {stream_url}')
+    except Exception as e:
+        logger.warning(f'抽帧失败 {stream_url}: {e}')
+    return None
+
+
+def _upload_frame_to_dataset(java_backend_url: str, dataset_id: int, image_bytes: bytes, filename: str) -> bool:
+    """上传单帧到数据集。"""
+    try:
+        resp = requests.post(
+            f'{java_backend_url}/admin-api/dataset/image/upload',
+            files={'file': (filename, io.BytesIO(image_bytes), 'image/jpeg')},
+            data={'datasetId': str(dataset_id), 'isZip': 'false'},
+            timeout=60,
+        )
+        if resp.status_code != 200:
+            return False
+        body = resp.json()
+        if body.get('code') != 0:
+            return False
+        data = body.get('data') or {}
+        return int(data.get('successCount') or 0) > 0
+    except Exception as e:
+        logger.warning(f'上传帧到数据集失败: {e}')
+        return False
+
+
+def _sam_label_images(
+    task: AutoLabelTask,
+    task_id: int,
+    sam_service,
+    java_backend_url: str,
+    images: list,
+    app=None,
+) -> tuple[int, int]:
+    """按智能策略标注图片列表，返回 (success_count, failed_count)。"""
+    from app.services.auto_label_orchestrator import (
+        is_task_paused_or_cancelled,
+        label_image_with_strategy,
+        on_label_batch_complete,
+        _update_counters,
+    )
+
+    success_count = 0
+    failed_count = 0
+    inference_service = None
+    model_id = None
+    try:
+        from app.services.auto_label_strategy import get_current_model_id
+        model_id = get_current_model_id(task)
+        if model_id:
+            from app.services.inference_service import InferenceService
+            inference_service = InferenceService(model_id)
+            inference_service.get_model()
+    except Exception as e:
+        logger.warning('YOLO 模型加载跳过: %s', e)
+
+    for image in images:
+        if is_task_paused_or_cancelled(task):
+            break
+        image_id, temp_path, image_width, image_height = _download_dataset_image(image)
+        if not temp_path:
+            failed_count += 1
+            db.session.add(AutoLabelResult(
+                task_id=task_id,
+                dataset_image_id=image_id or image.get('id', 0),
+                status='FAILED',
+                error_message='下载或解析图片失败',
+            ))
+            continue
+        try:
+            annotations, mode_used = label_image_with_strategy(
+                task, temp_path, image_width, image_height,
+                sam_service=sam_service,
+                inference_service=inference_service,
+            )
+            if mode_used == 'skip':
+                continue
+            db.session.add(AutoLabelResult(
+                task_id=task_id,
+                dataset_image_id=image_id,
+                annotations=json.dumps(annotations, ensure_ascii=False),
+                status='SUCCESS',
+            ))
+            update_response = requests.put(
+                f'{java_backend_url}/admin-api/dataset/image/update',
+                json={
+                    'id': image_id,
+                    'datasetId': task.dataset_id,
+                    'annotations': json.dumps(annotations, ensure_ascii=False),
+                    'completed': 1 if annotations else 0,
+                },
+                timeout=10,
+            )
+            if update_response.status_code != 200:
+                logger.warning(f'更新图片标注失败: {image_id}')
+            success_count += 1
+            _update_counters(task, mode_used)
+        except Exception as e:
+            logger.error(f'处理图片失败: {e}', exc_info=True)
+            failed_count += 1
+            db.session.add(AutoLabelResult(
+                task_id=task_id,
+                dataset_image_id=image_id or image.get('id', 0),
+                status='FAILED',
+                error_message=str(e),
+            ))
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                os.unlink(temp_path)
+
+    if app and success_count > 0:
+        on_label_batch_complete(task, app)
+    return success_count, failed_count
+
+
+def execute_pipeline_task(app, task_id: int):
+    """无人值守流水线：循环采集 → 标注 → 结束后打包。"""
+    task = None
+    with app.app_context():
+        try:
+            task = AutoLabelTask.query.get(task_id)
+            if not task:
+                logger.error(f'流水线任务不存在: {task_id}')
+                return
+
+            cfg = _parse_pipeline_config(task)
+            duration_hours = int(cfg.get('duration_hours', 8))
+            capture_interval = int(cfg.get('capture_interval_sec', 30))
+            auto_export = bool(cfg.get('auto_export', True))
+            deadline = datetime.now() + timedelta(hours=duration_hours)
+
+            java_backend_url = _dataset_java_base()
+            sam_service = get_sam_service()
+            sam_service.warmup_if_needed()
+
+            task.status = 'PROCESSING'
+            task.started_at = datetime.now()
+            _save_pipeline_config(task, {'pipeline_status': 'collecting'})
+            _pipeline_log(task, f'流水线已启动，计划运行 {duration_hours} 小时')
+            db.session.commit()
+
+            captured_total = 0
+            labeled_total = 0
+            cycle = 0
+
+            while datetime.now() < deadline:
+                db.session.refresh(task)
+                from app.services.auto_label_orchestrator import is_task_paused_or_cancelled
+                if is_task_paused_or_cancelled(task):
+                    _pipeline_log(task, '任务已暂停或取消，流水线停止')
+                    db.session.commit()
+                    return
+
+                cycle += 1
+                remaining_min = int((deadline - datetime.now()).total_seconds() / 60)
+                _pipeline_log(task, f'第 {cycle} 轮采集开始（剩余约 {remaining_min} 分钟）')
+
+                frame_tasks = _fetch_frame_tasks(java_backend_url, task.dataset_id)
+                if not frame_tasks:
+                    _pipeline_log(
+                        task,
+                        '未找到视频流帧捕获任务，请在「添加 → 视频流抽帧任务」中配置 RTMP/RTSP 地址',
+                    )
+                else:
+                    for ft in frame_tasks:
+                        stream_url = (ft.get('rtmpUrl') or '').strip()
+                        if not stream_url:
+                            continue
+                        img_bytes = _capture_stream_frame(stream_url)
+                        if not img_bytes:
+                            _pipeline_log(task, f'抽帧失败: {ft.get("taskName") or stream_url[:40]}')
+                            continue
+                        fname = f'cap_{datetime.now().strftime("%Y%m%d%H%M%S%f")}.jpg'
+                        if _upload_frame_to_dataset(java_backend_url, task.dataset_id, img_bytes, fname):
+                            captured_total += 1
+                            _save_pipeline_config(task, {'captured_count': captured_total})
+                            task.processed_images = captured_total + labeled_total
+                            db.session.commit()
+
+                all_images = _fetch_all_dataset_images(java_backend_url, task.dataset_id)
+                unlabeled = [img for img in all_images if not img.get('completed')]
+                batch = unlabeled[:30]
+
+                if batch:
+                    _save_pipeline_config(task, {'pipeline_status': 'labeling'})
+                    _pipeline_log(task, f'开始标注 {len(batch)} 张（待标注共 {len(unlabeled)} 张）')
+                    db.session.commit()
+
+                    ok, fail = _sam_label_images(task, task_id, sam_service, java_backend_url, batch, app)
+                    labeled_total += ok
+                    task.success_count = labeled_total
+                    task.failed_count = (task.failed_count or 0) + fail
+                    task.total_images = captured_total
+                    task.processed_images = captured_total + labeled_total
+                    _save_pipeline_config(task, {
+                        'pipeline_status': 'collecting',
+                        'labeled_count': labeled_total,
+                    })
+                    _pipeline_log(task, f'本轮标注完成：成功 {ok}，失败 {fail}')
+                    db.session.commit()
+
+                if datetime.now() >= deadline:
+                    break
+                time.sleep(capture_interval)
+
+            _pipeline_log(task, '采集阶段结束，执行最终全量标注')
+            _save_pipeline_config(task, {'pipeline_status': 'labeling'})
+            db.session.commit()
+
+            all_images = _fetch_all_dataset_images(java_backend_url, task.dataset_id)
+            unlabeled = [img for img in all_images if not img.get('completed')]
+            if unlabeled:
+                ok, fail = _sam_label_images(task, task_id, sam_service, java_backend_url, unlabeled, app)
+                labeled_total += ok
+                task.failed_count = (task.failed_count or 0) + fail
+                _pipeline_log(task, f'最终标注：成功 {ok}，失败 {fail}')
+
+            task.success_count = labeled_total
+            task.total_images = max(captured_total, len(all_images))
+            task.processed_images = task.total_images
+
+            if auto_export and labeled_total > 0:
+                _save_pipeline_config(task, {'pipeline_status': 'packaging'})
+                _pipeline_log(task, '开始自动划分用途并打包导出')
+                db.session.commit()
+                try:
+                    text_prompts = _parse_text_prompts(task)
+                    export_body = {
+                        'trainRatio': float(cfg.get('export_train_ratio', 0.7)),
+                        'valRatio': float(cfg.get('export_val_ratio', 0.2)),
+                        'testRatio': float(cfg.get('export_test_ratio', 0.1)),
+                        'sampleSelection': 'all',
+                        'selectedClasses': text_prompts,
+                        'exportPrefix': f'sam_pipeline_{task.dataset_id}',
+                    }
+                    resp = requests.post(
+                        _dataset_annotation_url(task.dataset_id, 'export'),
+                        json=export_body,
+                        timeout=1800,
+                    )
+                    if resp.ok:
+                        _save_pipeline_config(task, {'packaged': True})
+                        _pipeline_log(task, '数据集已自动打包导出')
+                    else:
+                        _pipeline_log(task, f'自动打包失败: HTTP {resp.status_code}')
+                except Exception as e:
+                    _pipeline_log(task, f'自动打包异常: {e}')
+
+            task.status = 'COMPLETED'
+            task.completed_at = datetime.now()
+            _save_pipeline_config(task, {'pipeline_status': 'done'})
+            _pipeline_log(task, f'流水线完成：采集 {captured_total} 张，标注 {labeled_total} 张')
+            db.session.commit()
+
+        except Exception as e:
+            logger.error(f'执行无人值守流水线失败: {str(e)}', exc_info=True)
+            if task:
+                task.status = 'FAILED'
+                task.error_message = str(e)
+                task.completed_at = datetime.now()
+                _save_pipeline_config(task, {'pipeline_status': 'failed'})
+                _pipeline_log(task, f'流水线失败: {e}')
+                db.session.commit()
+
+
 def execute_auto_label_task(app, task_id):
     """执行自动化标注任务：YOLO 直连 InferenceService 或 SAM 进程内推理。"""
     task = None
@@ -654,12 +1268,12 @@ def execute_auto_label_task(app, task_id):
             task.started_at = datetime.now()
             db.session.commit()
 
-            java_backend_url = os.getenv('JAVA_BACKEND_URL', 'http://localhost:8080').rstrip('/')
+            java_backend_url = _dataset_java_base()
             logger.info(f"开始获取数据集图片列表: dataset_id={task.dataset_id}, label_mode={label_mode}")
 
             images = _fetch_all_dataset_images(java_backend_url, task.dataset_id)
 
-            if task.phase == 'BOOTSTRAP' or (task.bootstrap_limit and label_mode == 'sam'):
+            if task.phase == 'BOOTSTRAP' or (task.bootstrap_limit and label_mode == 'sam' and task.phase != 'PIPELINE'):
                 images = _select_bootstrap_images(images, task)
             elif task.bootstrap_selection == 'unlabeled_only':
                 images = [img for img in images if not img.get('completed')]
@@ -669,6 +1283,18 @@ def execute_auto_label_task(app, task_id):
             task.success_count = 0
             task.failed_count = 0
             db.session.commit()
+
+            if not images:
+                if task.phase == 'BOOTSTRAP':
+                    raise RuntimeError(
+                        '数据集中暂无待标注图片。请先通过「添加 → 视频流抽帧任务」配置摄像头采集，'
+                        '或导入图片后再启动 SAM 标注。'
+                    )
+                logger.info(f'数据集 {task.dataset_id} 无待处理图片，任务直接完成')
+                task.status = 'COMPLETED'
+                task.completed_at = datetime.now()
+                db.session.commit()
+                return
 
             logger.info(f"数据集 {task.dataset_id} 本批 {len(images)} 张，label_mode={label_mode}")
 

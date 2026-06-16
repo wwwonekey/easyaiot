@@ -145,6 +145,31 @@ export const RECORD_SPACE_MANAGE_ROUTE: AppRouteRecordRaw = {
   ],
 }
 
+/** SAM 模型安装独立页（从数据集智能标注跳转） */
+export const SAM_MODEL_SETUP_ROUTE: AppRouteRecordRaw = {
+  path: '/dataset/sam-model-setup',
+  component: LAYOUT,
+  name: 'SamModelSetupLayout',
+  meta: {
+    title: 'SAM 模型安装',
+    hideMenu: true,
+    hideBreadcrumb: true,
+  },
+  children: [
+    {
+      path: '',
+      name: 'SamModelSetup',
+      component: () => import('@/views/dataset/components/AutoLabel/SamModelSetup/index.vue'),
+      meta: {
+        title: 'SAM 模型安装',
+        hideMenu: true,
+        canTo: true,
+        activeMenu: 'dataset/index',
+      },
+    },
+  ],
+}
+
 /** 抓拍空间告警独立页（从抓拍空间列表跳转） */
 export const SNAP_SPACE_MANAGE_ROUTE: AppRouteRecordRaw = {
   path: '/snap-space-manage',

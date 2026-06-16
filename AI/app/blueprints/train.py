@@ -812,6 +812,13 @@ def _resolve_pretrained_model_path(model_arch: str, task_id: int):
     model_arch = (model_arch or 'yolov8n.pt').strip()
     ai_root = get_project_root()
 
+    if model_arch.startswith('@AI/'):
+        rel = model_arch[4:].lstrip('/')
+        local = os.path.join(ai_root, rel)
+        if os.path.exists(local):
+            return os.path.abspath(local), None
+        return None, f'预训练模型不存在: {local}'
+
     if model_arch.startswith('/api/v1/buckets/'):
         bucket_name, object_key = _parse_minio_download_url(model_arch)
         if not bucket_name or not object_key:

@@ -858,8 +858,14 @@ def _build_absolute_url(maybe_path_or_url: str) -> Optional[str]:
     if maybe_path_or_url.startswith('http://') or maybe_path_or_url.startswith('https://'):
         return maybe_path_or_url
     if maybe_path_or_url.startswith('/'):
-        # 浏览器经前端(如 8888)代理可访问 /api/v1/buckets/...，DEVICE 网关(48080)未必暴露该路径
-        base = os.getenv('MODEL_DOWNLOAD_BASE_URL') or os.getenv('GATEWAY_URL') or 'http://localhost:48080'
+        # 优先 MinIO Console（9001），其次 AI 代理（与 AI_SERVICE_URL 拼接），再网关
+        base = (
+            os.getenv('MODEL_DOWNLOAD_BASE_URL')
+            or os.getenv('MINIO_CONSOLE_URL')
+            or os.getenv('AI_SERVICE_URL')
+            or os.getenv('GATEWAY_URL')
+            or 'http://localhost:5000'
+        )
         if not base.endswith('/'):
             base += '/'
         return urllib.parse.urljoin(base, maybe_path_or_url.lstrip('/'))
