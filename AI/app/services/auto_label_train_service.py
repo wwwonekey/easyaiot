@@ -351,6 +351,29 @@ def run_auto_train_pipeline(
             class_names=prompts or None,
         )
         log_fn(f'模型已发布 model_id={model_id}')
+
+        try:
+            from app.services.auto_label_model_service import (
+                count_annotated_images,
+                fetch_dataset_class_names,
+                record_pipeline_model_update,
+            )
+            class_names_for_hist = prompts or fetch_dataset_class_names(auto_task.dataset_id)
+            annotated_n = count_annotated_images(auto_task.dataset_id)
+            record_pipeline_model_update(
+                auto_task.dataset_id,
+                model_id=model_id,
+                train_task_id=finished.id,
+                annotated_count=annotated_n,
+                class_names=class_names_for_hist,
+                source_model_id=current_mid,
+                map50=map50,
+                history_max=strategy.get('model_history_max'),
+            )
+            log_fn('已写入自动标注模型更新历史并绑定数据集')
+        except Exception as e:
+            log_fn(f'写入模型更新历史失败（不影响训练结果）: {e}')
+
         return model_id
     except Exception as e:
         logger.error('自动训练流程失败: %s', e, exc_info=True)

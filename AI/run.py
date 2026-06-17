@@ -289,6 +289,7 @@ def create_app():
                 AIService,
                 AutoLabelTask,
                 AutoLabelResult,
+                AutoLabelModelHistory,
                 ensure_model_table_status_column,
                 ensure_model_class_columns,
                 ensure_train_task_name_column,
@@ -298,6 +299,7 @@ def create_app():
                 ensure_auto_label_task_pipeline_column,
                 ensure_auto_label_task_cluster_columns,
                 ensure_auto_label_subtask_table,
+                ensure_auto_label_model_history_table,
                 AutoLabelSubTask,
             )
             db.create_all()
@@ -310,6 +312,7 @@ def create_app():
             ensure_auto_label_task_pipeline_column(db.engine)
             ensure_auto_label_task_cluster_columns(db.engine)
             ensure_auto_label_subtask_table(db.engine)
+            ensure_auto_label_model_history_table(db.engine)
             print(f"✅ 数据库连接成功，表结构已创建/验证")
         except Exception as e:
             error_msg = str(e)

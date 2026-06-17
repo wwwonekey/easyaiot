@@ -571,8 +571,11 @@ def cancel_auto_label_task(dataset_id, task_id):
 
 @auto_label_bp.route('/dataset/<int:dataset_id>/auto-label/bootstrap/status', methods=['GET'])
 def bootstrap_status(dataset_id):
-    """冷启动进度与训练就绪状态"""
+    """冷启动进度、识别率与训练就绪状态"""
     try:
+        from app.services.auto_label_strategy import get_strategy, parse_pipeline_state
+        from app.services.sam_bootstrap_quality import assess_sam_bootstrap_quality
+
         task = AutoLabelTask.query.filter_by(
             dataset_id=dataset_id,
         ).filter(
@@ -583,9 +586,25 @@ def bootstrap_status(dataset_id):
 
         labeled = task.success_count or 0
         limit = task.bootstrap_limit or 200
-        ready_for_train = (
+        if task.phase == 'PIPELINE':
+            strategy = get_strategy(task)
+            limit = int(strategy.get('bootstrap_sam_limit') or limit)
+            state = parse_pipeline_state(task)
+            labeled = int(state.get('sam_hit_count') or 0) + int(state.get('sam_empty_count') or 0)
+            if labeled == 0:
+                labeled = int(state.get('sam_labeled') or task.success_count or 0)
+
+        strategy = get_strategy(task) if task.phase == 'PIPELINE' else {}
+        min_hit_rate = float(strategy.get('sam_bootstrap_min_hit_rate') or 0.3)
+        quality = assess_sam_bootstrap_quality(task, min_hit_rate)
+        bootstrap_done = (
             task.status == 'COMPLETED'
-            and labeled >= min(limit, task.total_images or 0)
+            or (task.phase == 'PIPELINE' and labeled >= limit)
+            or (task.phase == 'BOOTSTRAP' and (task.processed_images or 0) >= limit)
+        )
+        ready_for_train = (
+            bootstrap_done
+            and quality['sam_quality_passed']
             and bool(task.review_passed)
         )
         return jsonify({
@@ -595,12 +614,16 @@ def bootstrap_status(dataset_id):
                 'has_task': True,
                 'task_id': task.id,
                 'status': task.status,
+                'phase': task.phase,
                 'processed_images': task.processed_images,
                 'total_images': task.total_images,
-                'success_count': labeled,
+                'success_count': task.success_count,
                 'bootstrap_limit': limit,
                 'review_passed': bool(task.review_passed),
+                'bootstrap_done': bootstrap_done,
                 'ready_for_train': ready_for_train,
+                'awaiting_sam_review': bool(parse_pipeline_state(task).get('awaiting_sam_review')),
+                **quality,
             },
         })
     except Exception as e:
@@ -618,16 +641,189 @@ def bootstrap_complete_review(dataset_id):
             dataset_id=dataset_id, phase='BOOTSTRAP', status='COMPLETED'
         ).order_by(AutoLabelTask.created_at.desc()).first()
         if not task:
+            task = AutoLabelTask.query.filter_by(
+                dataset_id=dataset_id, phase='PIPELINE'
+            ).order_by(AutoLabelTask.created_at.desc()).first()
+        if not task:
             return jsonify({'code': 404, 'msg': '未找到已完成的冷启动任务'}), 404
+
+        from app.services.sam_bootstrap_quality import assess_sam_bootstrap_quality
+        from app.services.auto_label_strategy import get_strategy, parse_pipeline_state
+
+        strategy = get_strategy(task)
+        quality = assess_sam_bootstrap_quality(
+            task, float(strategy.get('sam_bootstrap_min_hit_rate') or 0.3),
+        )
+        if review_passed and not quality['sam_quality_passed']:
+            return jsonify({
+                'code': 400,
+                'msg': (
+                    f'SAM 识别率 {quality["recognition_rate_pct"]}% 低于阈值 '
+                    f'{quality["min_hit_rate_pct"]}%，请先恢复冷启动标注或改用手动/YOLO 自动标注'
+                ),
+                'data': quality,
+            }), 400
+
         task.review_passed = review_passed
+        state = parse_pipeline_state(task)
+        if review_passed:
+            state['awaiting_sam_review'] = False
+            task.pipeline_config = json.dumps(state, ensure_ascii=False)
         db.session.commit()
         return jsonify({
             'code': 0,
             'msg': '抽检状态已更新',
-            'data': {'task_id': task.id, 'review_passed': review_passed},
+            'data': {'task_id': task.id, 'review_passed': review_passed, **quality},
         })
     except Exception as e:
         db.session.rollback()
+        return jsonify({'code': 500, 'msg': str(e)}), 500
+
+
+@auto_label_bp.route('/dataset/<int:dataset_id>/auto-label/bootstrap/reset', methods=['POST'])
+def bootstrap_reset_annotations(dataset_id):
+    """恢复冷启动 SAM 自动标注到初始状态（清空标注、重置抽检）"""
+    try:
+        task = AutoLabelTask.query.filter_by(dataset_id=dataset_id).filter(
+            AutoLabelTask.phase.in_(['BOOTSTRAP', 'PIPELINE']),
+        ).order_by(AutoLabelTask.created_at.desc()).first()
+        if not task:
+            return jsonify({'code': 404, 'msg': '未找到冷启动任务'}), 404
+
+        java_backend_url = _dataset_java_base()
+        reset_count = 0
+        for row in AutoLabelResult.query.filter_by(task_id=task.id, status='SUCCESS').all():
+            try:
+                resp = requests.put(
+                    f'{java_backend_url}/admin-api/dataset/image/update',
+                    json={
+                        'id': row.dataset_image_id,
+                        'datasetId': dataset_id,
+                        'annotations': '[]',
+                        'completed': 0,
+                    },
+                    timeout=10,
+                )
+                if resp.status_code == 200:
+                    reset_count += 1
+            except Exception as e:
+                logger.warning('恢复图片 %s 失败: %s', row.dataset_image_id, e)
+
+        from app.services.auto_label_strategy import parse_pipeline_state
+        from app.services.auto_label_orchestrator import _save_pipeline_state
+
+        task.review_passed = False
+        state = parse_pipeline_state(task)
+        for key in ('sam_hit_count', 'sam_empty_count', 'sam_labeled', 'total_labeled', 'sam_quality'):
+            state.pop(key, None)
+        state['awaiting_sam_review'] = False
+        state['sam_quality_passed'] = None
+        if task.phase == 'PIPELINE':
+            from app.services.auto_label_strategy import PHASE_BOOTSTRAP_SAM
+            state['pipeline_phase'] = PHASE_BOOTSTRAP_SAM
+            _save_pipeline_state(task, state)
+        elif task.pipeline_config:
+            task.pipeline_config = json.dumps(state, ensure_ascii=False)
+
+        task.success_count = 0
+        task.processed_images = 0
+        if task.phase == 'BOOTSTRAP':
+            task.status = 'PENDING'
+            task.completed_at = None
+        db.session.commit()
+
+        return jsonify({
+            'code': 0,
+            'msg': f'已恢复 {reset_count} 张图片到未标注状态',
+            'data': {'task_id': task.id, 'reset_count': reset_count},
+        })
+    except Exception as e:
+        db.session.rollback()
+        logger.error('恢复冷启动标注失败: %s', e, exc_info=True)
+        return jsonify({'code': 500, 'msg': str(e)}), 500
+
+
+@auto_label_bp.route('/dataset/<int:dataset_id>/auto-label/model/history', methods=['GET'])
+def list_auto_label_model_history(dataset_id):
+    """获取数据集自动标注模型更新历史（条数上限可配置）"""
+    try:
+        from app.services.auto_label_model_service import (
+            get_model_history_max,
+            get_dataset_bound_model_id,
+            list_model_history,
+        )
+
+        max_history = get_model_history_max()
+        limit_arg = request.args.get('limit')
+        limit = max_history if limit_arg is None else int(limit_arg)
+        limit = min(max(1, limit), max_history)
+        history = list_model_history(dataset_id, limit=limit)
+        current_model_id = get_dataset_bound_model_id(dataset_id)
+        model_info = None
+        if current_model_id:
+            m = Model.query.get(current_model_id)
+            if m:
+                model_info = {
+                    'id': m.id,
+                    'name': m.name,
+                    'version': m.version,
+                }
+        return jsonify({
+            'code': 0,
+            'msg': '获取成功',
+            'data': {
+                'current_model_id': current_model_id,
+                'current_model': model_info,
+                'history': history,
+                'max_history': max_history,
+            },
+        })
+    except Exception as e:
+        logger.error('获取模型更新历史失败: %s', e, exc_info=True)
+        return jsonify({'code': 500, 'msg': str(e)}), 500
+
+
+@auto_label_bp.route('/dataset/<int:dataset_id>/auto-label/model/update', methods=['POST'])
+def update_auto_label_model(dataset_id):
+    """根据当前已标注数据微调并更新数据集自动标注模型"""
+    try:
+        from app.services.auto_label_model_service import start_dataset_model_update
+
+        data = request.json or {}
+        base_model_id = data.get('base_model_id') or data.get('model_id')
+        if base_model_id is not None:
+            try:
+                base_model_id = int(base_model_id)
+            except (TypeError, ValueError):
+                base_model_id = None
+
+        strategy_raw = data.get('strategy') if isinstance(data.get('strategy'), dict) else None
+        if data.get('train_epochs') is not None:
+            strategy_raw = strategy_raw or {}
+            strategy_raw['train_epochs'] = int(data['train_epochs'])
+        if data.get('model_history_max') is not None:
+            strategy_raw = strategy_raw or {}
+            strategy_raw['model_history_max'] = int(data['model_history_max'])
+
+        from flask import current_app
+        app = current_app._get_current_object()
+        record = start_dataset_model_update(
+            dataset_id,
+            app,
+            base_model_id=base_model_id,
+            strategy_raw=strategy_raw,
+        )
+        return jsonify({
+            'code': 0,
+            'msg': '模型更新任务已启动，请稍后在历史记录中查看进度',
+            'data': record.to_dict(),
+        })
+    except ValueError as e:
+        return jsonify({'code': 400, 'msg': str(e)}), 400
+    except RuntimeError as e:
+        return jsonify({'code': 409, 'msg': str(e)}), 409
+    except Exception as e:
+        logger.error('启动模型更新失败: %s', e, exc_info=True)
         return jsonify({'code': 500, 'msg': str(e)}), 500
 
 
@@ -1046,6 +1242,7 @@ def _sam_label_images(
             )
             if mode_used == 'skip':
                 continue
+            has_detections = len(annotations) > 0
             db.session.add(AutoLabelResult(
                 task_id=task_id,
                 dataset_image_id=image_id,
@@ -1065,7 +1262,7 @@ def _sam_label_images(
             if update_response.status_code != 200:
                 logger.warning(f'更新图片标注失败: {image_id}')
             success_count += 1
-            _update_counters(task, mode_used)
+            _update_counters(task, mode_used, has_detections=has_detections)
         except Exception as e:
             logger.error(f'处理图片失败: {e}', exc_info=True)
             failed_count += 1
@@ -1300,6 +1497,8 @@ def execute_auto_label_task(app, task_id):
 
             success_count = 0
             failed_count = 0
+            sam_hit_count = 0
+            sam_empty_count = 0
             prefetch_workers = int(os.getenv('AUTO_LABEL_PREFETCH_WORKERS', '2'))
             annotation_type = task.annotation_type or 'rectangle'
             return_masks = bool(task.return_masks)
@@ -1367,6 +1566,11 @@ def execute_auto_label_task(app, task_id):
                         if update_response.status_code != 200:
                             logger.warning(f"更新图片标注失败: {image_id}")
                         success_count += 1
+                        if label_mode == 'sam':
+                            if annotations:
+                                sam_hit_count += 1
+                            else:
+                                sam_empty_count += 1
                     except Exception as e:
                         logger.error(f"处理图片失败: {e}", exc_info=True)
                         failed_count += 1
@@ -1388,6 +1592,24 @@ def execute_auto_label_task(app, task_id):
 
             task.status = 'COMPLETED'
             task.completed_at = datetime.now()
+            if label_mode == 'sam' and (sam_hit_count + sam_empty_count) > 0:
+                from app.services.sam_bootstrap_quality import assess_sam_bootstrap_quality
+
+                cfg = {}
+                if task.pipeline_config:
+                    try:
+                        cfg = json.loads(task.pipeline_config)
+                    except Exception:
+                        cfg = {}
+                cfg['sam_hit_count'] = sam_hit_count
+                cfg['sam_empty_count'] = sam_empty_count
+                task.pipeline_config = json.dumps(cfg, ensure_ascii=False)
+                db.session.flush()
+                quality = assess_sam_bootstrap_quality(task, 0.3)
+                cfg['sam_quality'] = quality
+                cfg['sam_quality_passed'] = quality['sam_quality_passed']
+                cfg['awaiting_sam_review'] = not quality['sam_quality_passed']
+                task.pipeline_config = json.dumps(cfg, ensure_ascii=False)
             db.session.commit()
 
             logger.info(

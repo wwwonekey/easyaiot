@@ -58,6 +58,10 @@ DEFAULT_STRATEGY: dict[str, Any] = {
     'sam_supplement_min_detections': 1,
     'yolo_confidence': 0.5,
     'sam_confidence': 0.45,
+    # SAM 冷启动最低识别率（有检出图片占比），低于此值建议改用手动/YOLO 自动标注
+    'sam_bootstrap_min_hit_rate': 0.3,
+    # 自动标注模型更新历史保留条数（None=读环境变量 AUTO_LABEL_MODEL_HISTORY_MAX）
+    'model_history_max': None,
     'train_epochs': 50,
     'train_batch_size': 16,
     'train_imgsz': 640,

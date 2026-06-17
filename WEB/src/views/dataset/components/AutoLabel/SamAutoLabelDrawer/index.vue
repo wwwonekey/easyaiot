@@ -315,6 +315,18 @@
                       </div>
                     </FormItem>
                   </template>
+
+                  <FormItem :label="COPY.form.modelHistoryMax">
+                    <InputNumber
+                      v-model:value="form.strategy.model_history_max"
+                      :min="1"
+                      :max="100"
+                      placeholder="服务端默认"
+                      allow-clear
+                      style="width: 100%"
+                    />
+                    <p class="form-hint">{{ COPY.form.modelHistoryMaxHint }}</p>
+                  </FormItem>
                 </Form>
               </div>
 
@@ -383,7 +395,38 @@
               </section>
 
               <Alert
-                v-if="taskStatus === 'COMPLETED'"
+                v-if="bootstrapQualityAlert"
+                :type="bootstrapQualityAlert.type"
+                show-icon
+                class="monitor-alert sam-quality-alert"
+              >
+                <template #message>{{ bootstrapQualityAlert.title }}</template>
+                <template #description>
+                  <p>{{ bootstrapQualityAlert.desc }}</p>
+                  <p v-if="bootstrapStatus" class="sam-quality-stats">
+                    识别率 {{ bootstrapStatus.recognition_rate_pct ?? 0 }}%
+                    （有检出 {{ bootstrapStatus.sam_hit_count ?? 0 }} 张 /
+                    空结果 {{ bootstrapStatus.sam_empty_count ?? 0 }} 张，
+                    阈值 {{ bootstrapStatus.min_hit_rate_pct ?? 30 }}%）
+                  </p>
+                  <Space v-if="bootstrapQualityAlert.showActions" class="sam-quality-actions">
+                    <Button size="small" :loading="resetLoading" @click="handleResetBootstrap">
+                      恢复冷启动标注
+                    </Button>
+                    <Button size="small" type="primary" @click="emitOpenAutoLabel">
+                      改用自动标注（YOLO）
+                    </Button>
+                  </Space>
+                  <Space v-else-if="bootstrapStatus && !bootstrapStatus.review_passed" class="sam-quality-actions">
+                    <Button size="small" type="primary" :loading="reviewLoading" @click="handleSubmitReview">
+                      抽检通过，继续训练
+                    </Button>
+                  </Space>
+                </template>
+              </Alert>
+
+              <Alert
+                v-if="taskStatus === 'COMPLETED' && !bootstrapQualityAlert"
                 type="success"
                 show-icon
                 class="monitor-alert"
@@ -440,6 +483,7 @@ import {
   Empty,
   Form,
   FormItem,
+  InputNumber,
   Progress,
   Select,
   Slider,
@@ -467,8 +511,11 @@ import {
   resumeAutoLabelTask,
   cancelAutoLabelTask,
   getAutoLabelModelList,
+  getSamBootstrapStatus,
+  resetSamBootstrapAnnotations,
+  completeSamBootstrapReview,
 } from '@/api/device/auto-label';
-import type { AutoLabelStrategy } from '@/api/device/auto-label';
+import type { AutoLabelStrategy, SamBootstrapStatus } from '@/api/device/auto-label';
 import { getDatasetFrameTaskPage } from '@/api/device/dataset';
 import { useMessage } from '@/hooks/web/useMessage';
 import { SETUP_FORM_LABEL_COL, SETUP_FORM_WRAPPER_COL } from '@/views/node/utils/constants';
@@ -484,6 +531,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   success: [payload: { taskId: number }];
   'open-frame-tasks': [];
+  'open-auto-label': [];
   register: [];
 }>();
 
@@ -564,6 +612,8 @@ const COPY = {
     samSupplementMapHint: '设为 0 表示不按 mAP 停止 SAM 补充。',
     batchLimit: '首批规模',
     batchSelection: '选图规则',
+    modelHistoryMax: '模型历史保留',
+    modelHistoryMaxHint: '流水线自动训练后保留的模型版本数；留空则使用服务端配置（环境变量 AUTO_LABEL_MODEL_HISTORY_MAX，默认 15）。',
     clusterCameraWarn: '集群调度须至少选择一路视频流。',
   },
   monitor: {
@@ -578,6 +628,11 @@ const COPY = {
     paused: '任务已暂停，点击「继续」恢复。',
     cancelled: '任务已取消。',
     failed: '任务执行失败',
+    samQualityLowTitle: 'SAM 识别率偏低，建议改用手动或 YOLO 自动标注',
+    samQualityLowDesc:
+      '当前行业数据可能不适合 SAM3 零样本识别。请恢复冷启动自动标注到初始状态，改用手动标注或使用已训练的 YOLO 模型进行自动标注。',
+    samQualityOkTitle: 'SAM 冷启动识别率正常',
+    samQualityOkDesc: '请随机抽查 10–20 张修正明显错误后确认通过，再进入训练。',
   },
 } as const;
 
@@ -616,6 +671,8 @@ const defaultStrategy = (): AutoLabelStrategy => ({
   sam_supplement_min_detections: 1,
   yolo_confidence: 0.5,
   sam_confidence: 0.45,
+  sam_bootstrap_min_hit_rate: 0.3,
+  model_history_max: undefined,
 });
 
 const loading = ref(false);
@@ -628,6 +685,9 @@ const taskStatus = ref('');
 const frameTasks = ref<any[]>([]);
 const subtasks = ref<any[]>([]);
 const modelOptions = ref<{ label: string; value: number }[]>([]);
+const bootstrapStatus = ref<SamBootstrapStatus | null>(null);
+const resetLoading = ref(false);
+const reviewLoading = ref(false);
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 const subtaskColumns = [
@@ -876,6 +936,28 @@ const progressPercent = computed(() => {
   return Math.min(100, Math.round((done / total) * 100));
 });
 
+const bootstrapQualityAlert = computed(() => {
+  const status = bootstrapStatus.value;
+  if (!status?.bootstrap_done && !status?.awaiting_sam_review) return null;
+  if (status.review_recommended || status.awaiting_sam_review) {
+    return {
+      type: 'warning' as const,
+      title: COPY.monitor.samQualityLowTitle,
+      desc: COPY.monitor.samQualityLowDesc,
+      showActions: true,
+    };
+  }
+  if (status.sam_quality_passed && !status.review_passed) {
+    return {
+      type: 'info' as const,
+      title: COPY.monitor.samQualityOkTitle,
+      desc: COPY.monitor.samQualityOkDesc,
+      showActions: false,
+    };
+  }
+  return null;
+});
+
 watch(taskRunning, (running) => {
   if (running) activeTab.value = 'monitor';
 });
@@ -1088,6 +1170,49 @@ async function startTask(): Promise<void> {
   }
 }
 
+async function loadBootstrapStatus(): Promise<void> {
+  try {
+    const res = await getSamBootstrapStatus(props.datasetId);
+    bootstrapStatus.value = (res?.data ?? res) as SamBootstrapStatus;
+  } catch {
+    bootstrapStatus.value = null;
+  }
+}
+
+async function handleResetBootstrap(): Promise<void> {
+  resetLoading.value = true;
+  try {
+    const res = await resetSamBootstrapAnnotations(props.datasetId);
+    const count = res?.data?.reset_count ?? res?.reset_count ?? 0;
+    createMessage.success(`已恢复 ${count} 张图片到未标注状态`);
+    bootstrapStatus.value = null;
+    await resumeActiveTask();
+    emit('success', { taskId: taskId.value ?? 0 });
+  } catch (e: any) {
+    createMessage.error(e?.response?.data?.msg || e?.message || '恢复失败');
+  } finally {
+    resetLoading.value = false;
+  }
+}
+
+async function handleSubmitReview(): Promise<void> {
+  reviewLoading.value = true;
+  try {
+    await completeSamBootstrapReview(props.datasetId, { review_passed: true });
+    createMessage.success('抽检已通过');
+    await loadBootstrapStatus();
+  } catch (e: any) {
+    createMessage.error(e?.response?.data?.msg || e?.message || '提交失败');
+  } finally {
+    reviewLoading.value = false;
+  }
+}
+
+function emitOpenAutoLabel(): void {
+  emit('open-auto-label');
+  handleClose();
+}
+
 function startPolling(): void {
   if (pollTimer) clearInterval(pollTimer);
   const poll = async () => {
@@ -1099,6 +1224,15 @@ function startPolling(): void {
       taskStatus.value = task?.status || '';
       if (task?.execution_mode === 'cluster' || (task?.pipeline_config?.mode === 'cluster_pipeline')) {
         await loadSubtasks();
+      }
+      const phase = task?.pipeline_config?.pipeline_phase;
+      const bootstrapDone =
+        taskStatus.value === 'COMPLETED'
+        || phase === 'bootstrap_sam'
+        || task?.phase === 'BOOTSTRAP'
+        || task?.pipeline_config?.awaiting_sam_review;
+      if (bootstrapDone || task?.pipeline_config?.awaiting_sam_review) {
+        await loadBootstrapStatus();
       }
       if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(taskStatus.value)) {
         if (pollTimer) clearInterval(pollTimer);
@@ -1474,6 +1608,16 @@ onUnmounted(() => {
 
 .monitor-alert {
   margin-bottom: 16px;
+}
+
+.sam-quality-stats {
+  margin: 8px 0 0;
+  color: rgba(0, 0, 0, 0.65);
+  font-size: 13px;
+}
+
+.sam-quality-actions {
+  margin-top: 12px;
 }
 
 .log-editor {

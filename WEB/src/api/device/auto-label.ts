@@ -82,6 +82,10 @@ export interface AutoLabelStrategy {
   sam_supplement_min_detections?: number;
   yolo_confidence?: number;
   sam_confidence?: number;
+  /** SAM 冷启动最低识别率（0–1），低于此值建议改用手动/YOLO 自动标注 */
+  sam_bootstrap_min_hit_rate?: number;
+  /** 模型更新历史保留条数（不设则读服务端 AUTO_LABEL_MODEL_HISTORY_MAX） */
+  model_history_max?: number | null;
 }
 
 export interface StartSamPipelineParams {
@@ -139,6 +143,73 @@ export const completeSamBootstrapReview = (
   data: { review_passed: boolean; reviewer_note?: string },
 ) => {
   return commonApi('post', `${Api.AutoLabel}/dataset/${datasetId}/auto-label/bootstrap/complete-review`, { data });
+};
+
+export interface SamBootstrapStatus {
+  has_task?: boolean;
+  task_id?: number;
+  status?: string;
+  phase?: string;
+  processed_images?: number;
+  total_images?: number;
+  success_count?: number;
+  bootstrap_limit?: number;
+  bootstrap_done?: boolean;
+  review_passed?: boolean;
+  ready_for_train?: boolean;
+  awaiting_sam_review?: boolean;
+  sam_hit_count?: number;
+  sam_empty_count?: number;
+  recognition_rate?: number;
+  recognition_rate_pct?: number;
+  min_hit_rate?: number;
+  min_hit_rate_pct?: number;
+  sam_quality_passed?: boolean;
+  review_recommended?: boolean;
+}
+
+export const resetSamBootstrapAnnotations = (datasetId: number) => {
+  return commonApi('post', `${Api.AutoLabel}/dataset/${datasetId}/auto-label/bootstrap/reset`);
+};
+
+export interface AutoLabelModelHistoryItem {
+  id: number;
+  dataset_id: number;
+  model_id?: number;
+  train_task_id?: number;
+  source_model_id?: number;
+  version_no: number;
+  annotated_count: number;
+  class_names?: string[];
+  map50?: number;
+  status: 'PENDING' | 'TRAINING' | 'COMPLETED' | 'FAILED';
+  trigger_source?: string;
+  error_message?: string;
+  created_at?: string;
+  completed_at?: string;
+}
+
+export interface AutoLabelModelHistoryResult {
+  current_model_id?: number;
+  current_model?: { id: number; name: string; version?: string };
+  history: AutoLabelModelHistoryItem[];
+  max_history: number;
+}
+
+export const getAutoLabelModelHistory = (datasetId: number) => {
+  return commonApi('get', `${Api.AutoLabel}/dataset/${datasetId}/auto-label/model/history`);
+};
+
+export interface UpdateAutoLabelModelParams {
+  base_model_id?: number;
+  model_id?: number;
+  train_epochs?: number;
+  model_history_max?: number;
+  strategy?: Partial<AutoLabelStrategy>;
+}
+
+export const updateAutoLabelModel = (datasetId: number, data: UpdateAutoLabelModelParams = {}) => {
+  return commonApi('post', `${Api.AutoLabel}/dataset/${datasetId}/auto-label/model/update`, { data });
 };
 
 export const getAutoLabelTask = (datasetId: number, taskId: number) => {

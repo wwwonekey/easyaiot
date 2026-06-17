@@ -446,6 +446,7 @@
       ref="aiLabelModalRef"
       :dataset-id="datasetId"
       :total-images="totalImages"
+      :annotated-count="completedCount"
       :get-container="getModalContainer"
       @success="onBatchAiSuccess"
     />
@@ -454,6 +455,7 @@
       :dataset-id="datasetId"
       @success="onBatchAiSuccess"
       @open-frame-tasks="openManageDrawer('frame')"
+      @open-auto-label="openAiBatchModal"
     />
     <ImportDatasetModal
       ref="importModalRef"

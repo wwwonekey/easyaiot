@@ -201,7 +201,7 @@ def label_image_with_strategy(
     return [], mode
 
 
-def _update_counters(task: AutoLabelTask, mode_used: str) -> None:
+def _update_counters(task: AutoLabelTask, mode_used: str, *, has_detections: bool = True) -> None:
     state = parse_pipeline_state(task)
     counters = get_counters(task)
     counters['total_labeled'] = counters['total_labeled'] + 1
@@ -212,7 +212,11 @@ def _update_counters(task: AutoLabelTask, mode_used: str) -> None:
     elif mode_used == 'yolo_sam_supplement':
         counters['yolo_labeled'] += 1
         counters['sam_supplemented'] += 1
-    _save_pipeline_state(task, counters)
+    updates = dict(counters)
+    if mode_used in ('sam', 'yolo_sam_supplement'):
+        hit_key = 'sam_hit_count' if has_detections else 'sam_empty_count'
+        updates[hit_key] = int(state.get(hit_key) or 0) + 1
+    _save_pipeline_state(task, updates)
     task.success_count = counters['total_labeled']
 
 
@@ -316,9 +320,30 @@ def on_label_batch_complete(task: AutoLabelTask, app) -> None:
     bootstrap = int(strategy['bootstrap_sam_limit'])
 
     if phase in (PHASE_COLLECTING, PHASE_BOOTSTRAP_SAM) and counters['total_labeled'] >= bootstrap:
+        from app.services.sam_bootstrap_quality import assess_sam_bootstrap_quality
+
+        min_hit_rate = float(strategy.get('sam_bootstrap_min_hit_rate') or 0.3)
+        quality = assess_sam_bootstrap_quality(task, min_hit_rate)
+        _save_pipeline_state(task, {
+            'sam_quality': quality,
+            'sam_quality_passed': quality['sam_quality_passed'],
+        })
+        if not quality['sam_quality_passed']:
+            _save_pipeline_state(task, {'awaiting_sam_review': True})
+            _log(
+                task,
+                f'SAM 冷启动识别率 {quality["recognition_rate_pct"]}% 低于阈值 '
+                f'{quality["min_hit_rate_pct"]}%，建议恢复初始标注并改用手动标注或 YOLO 自动标注',
+            )
+            db.session.commit()
+            return
+
         next_phase = advance_phase_after_bootstrap(task)
-        _save_pipeline_state(task, {'pipeline_phase': next_phase})
-        _log(task, f'SAM 冷启动完成（{counters["total_labeled"]} 张），进入阶段：{next_phase}')
+        _save_pipeline_state(task, {
+            'pipeline_phase': next_phase,
+            'awaiting_sam_review': False,
+        })
+        _log(task, f'SAM 冷启动完成（{counters["total_labeled"]} 张，识别率 {quality["recognition_rate_pct"]}%），进入阶段：{next_phase}')
         db.session.commit()
         if next_phase == PHASE_TRAINING:
             _trigger_auto_train(task, app)
@@ -344,6 +369,8 @@ def init_pipeline_strategy(task: AutoLabelTask, strategy_raw: dict | None) -> No
         'sam_labeled': 0,
         'yolo_labeled': 0,
         'sam_supplemented': 0,
+        'sam_hit_count': 0,
+        'sam_empty_count': 0,
         'captured_count': 0,
         'train_round': 0,
         'logs': [],
