@@ -3394,14 +3394,42 @@ def alert_detection_worker(worker_id: int):
                     stream_info = task_config.device_streams.get(device_id_from_data, {})
                     device_name = stream_info.get('device_name', device_id_from_data)
 
-                try_send_alert_for_detections(
-                    device_id_from_data,
-                    device_name,
-                    frame_number,
-                    detections,
-                    alert_frame,
-                    timestamp,
+                post_process_enabled = bool(
+                    task_config and getattr(task_config, 'post_process_enabled', False)
                 )
+                if post_process_enabled:
+                    alert_image_path = None
+                    if detections:
+                        alert_image_path = save_alert_image(
+                            alert_frame,
+                            device_id_from_data,
+                            frame_number,
+                            detections[0],
+                        )
+                    try:
+                        from app.utils.post_process_runner import enqueue_post_process_request
+                        enqueue_post_process_request(
+                            task_config,
+                            device_id=device_id_from_data,
+                            device_name=device_name,
+                            frame_number=frame_number,
+                            timestamp=timestamp,
+                            detections=detections,
+                            tracked_detections=tracked_detections,
+                            alert_image_path=alert_image_path,
+                        )
+                    except Exception as pp_exc:
+                        logger.warning('后处理请求投递异常: %s', pp_exc)
+                else:
+                    if detections:
+                        try_send_alert_for_detections(
+                            device_id_from_data,
+                            device_name,
+                            frame_number,
+                            detections,
+                            alert_frame,
+                            timestamp,
+                        )
 
                 if frame_number % 10 == 0:
                     logger.info(

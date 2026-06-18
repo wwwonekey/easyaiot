@@ -381,6 +381,15 @@ export const WORKLOAD_BUNDLE_TYPES = [
     desc: '批量分发轮巡分析运行时与部署脚本',
   },
   {
+    key: 'post_process',
+    label: 'AI 后处理',
+    module: 'VIDEO',
+    remoteRoot: '/opt/easyaiot/VIDEO',
+    pythonLauncher: '/opt/easyaiot/VIDEO/.bundles/post_process/run-python.sh',
+    scriptMarker: 'services/post_process_worker/run_worker.py',
+    desc: '批量分发 AI 后处理 Kafka Worker/Sink 运行时与脚本（集群订阅处理与落库）',
+  },
+  {
     key: 'ai_service',
     label: '模型服务',
     module: 'AI',

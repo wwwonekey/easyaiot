@@ -175,6 +175,15 @@ def create_app():
     app.config['KAFKA_FACE_MATCHING_RESULT_TOPIC'] = os.environ.get('KAFKA_FACE_MATCHING_RESULT_TOPIC', 'iot-face-matching-result')
     app.config['KAFKA_PLATE_MATCHING_TOPIC'] = os.environ.get('KAFKA_PLATE_MATCHING_TOPIC', 'iot-plate-matching')
     app.config['KAFKA_PLATE_MATCHING_RESULT_TOPIC'] = os.environ.get('KAFKA_PLATE_MATCHING_RESULT_TOPIC', 'iot-plate-matching-result')
+    app.config['KAFKA_POST_PROCESS_REQUEST_TOPIC'] = os.environ.get(
+        'KAFKA_POST_PROCESS_REQUEST_TOPIC', 'iot-post-process-request',
+    )
+    app.config['KAFKA_POST_PROCESS_RESULT_TOPIC'] = os.environ.get(
+        'KAFKA_POST_PROCESS_RESULT_TOPIC', 'iot-post-process-result',
+    )
+    app.config['KAFKA_POST_PROCESS_SINK_GROUP'] = os.environ.get(
+        'KAFKA_POST_PROCESS_SINK_GROUP', 'video-post-process-sink',
+    )
     app.config['KAFKA_REQUEST_TIMEOUT_MS'] = int(os.environ.get('KAFKA_REQUEST_TIMEOUT_MS', '5000'))
     app.config['KAFKA_RETRIES'] = int(os.environ.get('KAFKA_RETRIES', '1'))
     app.config['KAFKA_RETRY_BACKOFF_MS'] = int(os.environ.get('KAFKA_RETRY_BACKOFF_MS', '100'))
@@ -218,11 +227,12 @@ def create_app():
                 Device, Image, DeviceDirectory, Nvr, SnapSpace, SnapTask, DetectionRegion,
                 AlgorithmModelService, RegionModelService, DeviceStorageConfig, Playback,
                 RecordSpace,                 AlgorithmTask, FrameExtractor, Sorter, Pusher, DeviceDetectionRegion,
-                DeviceTrackSession, DeviceTrackPoint, PatrolSession,
+                DeviceTrackSession, DeviceTrackPoint, PatrolSession, AlgorithmPostProcessResult,
             )
             db.create_all()
-            from models import ensure_algorithm_task_sam_columns
+            from models import ensure_algorithm_task_sam_columns, ensure_algorithm_task_post_process_columns
             ensure_algorithm_task_sam_columns(db.engine)
+            ensure_algorithm_task_post_process_columns(db.engine)
             
             # 迁移：检查并添加缺失的列和表
             try:
@@ -1371,6 +1381,16 @@ def create_app():
             print("✅ 推流转发任务服务自动启动完成")
         except Exception as e:
             print(f"❌ 自动启动推流转发任务服务失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
+        # 启动后处理 Sink 集群（结果落库 + 告警派发）
+        try:
+            from app.services.post_process_launcher_service import ensure_post_process_sink_workers
+            ensure_post_process_sink_workers()
+            print('✅ 后处理 Sink 集群已启动')
+        except Exception as e:
+            print(f'❌ 启动后处理 Sink 集群失败: {str(e)}')
             import traceback
             traceback.print_exc()
 

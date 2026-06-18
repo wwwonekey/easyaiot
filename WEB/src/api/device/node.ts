@@ -583,7 +583,11 @@ export type WorkloadBundleTypeKey =
   | 'stream_forward'
   | 'algorithm_realtime'
   | 'algorithm_snap'
-  | 'ai_service';
+  | 'algorithm_patrol'
+  | 'post_process'
+  | 'ai_service'
+  | 'auto_label'
+  | 'model_train';
 
 export interface WorkloadBundleBatchReq {
   nodeIds: number[];

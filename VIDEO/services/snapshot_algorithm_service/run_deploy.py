@@ -713,7 +713,31 @@ def _finish_snapshot_detection(
     _untrack_pending_snapshot(device_id, frame_number)
     device_name = _get_device_name(device_id)
     has_detections = bool(detections)
-    if has_detections:
+    post_process_enabled = bool(
+        task_config and getattr(task_config, 'post_process_enabled', False)
+    )
+    if has_detections and post_process_enabled:
+        alert_image_path = save_alert_image(
+            processed_frame,
+            device_id,
+            frame_number,
+            detections[0],
+        )
+        try:
+            from app.utils.post_process_runner import enqueue_post_process_request
+            enqueue_post_process_request(
+                task_config,
+                device_id=device_id,
+                device_name=device_name,
+                frame_number=frame_number,
+                timestamp=timestamp,
+                detections=detections,
+                tracked_detections=detections,
+                alert_image_path=alert_image_path,
+            )
+        except Exception as pp_exc:
+            logger.warning('抓拍后处理请求投递异常: %s', pp_exc)
+    elif has_detections:
         try_send_snapshot_detection_alert(
             device_id,
             device_name,

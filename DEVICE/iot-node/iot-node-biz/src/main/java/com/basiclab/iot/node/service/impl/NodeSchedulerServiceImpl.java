@@ -212,7 +212,8 @@ public class NodeSchedulerServiceImpl implements NodeSchedulerService {
     private boolean isComputeWorkload(String workloadType) {
         return "ai_service".equals(workloadType) || "algorithm_task".equals(workloadType)
                 || "stream_forward".equals(workloadType) || "auto_label".equals(workloadType)
-                || "model_train".equals(workloadType);
+                || "model_train".equals(workloadType) || "post_process".equals(workloadType)
+                || "post_process_sink".equals(workloadType);
     }
 
     private List<String> resolveRequiredCapabilities(NodeSchedulerAllocateReqVO reqVO) {

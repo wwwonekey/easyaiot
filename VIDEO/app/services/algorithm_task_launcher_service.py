@@ -26,6 +26,17 @@ logger = logging.getLogger(__name__)
 
 WORKLOAD_TYPE_ALGORITHM = 'algorithm_task'
 
+
+def _start_post_process_cluster(task: AlgorithmTask) -> Tuple[bool, str]:
+    from app.services.post_process_launcher_service import start_post_process_workers
+    return start_post_process_workers(task)
+
+
+def _stop_post_process_cluster(task_id: int, task: Optional[AlgorithmTask] = None) -> None:
+    from app.services.post_process_launcher_service import stop_post_process_workers
+    stop_post_process_workers(task_id, task)
+
+
 # 存储已启动的守护进程对象（参考 AI 模块的 deploy_service.py）
 _running_daemons: Dict[int, AlgorithmTaskDaemon] = {}
 _daemons_lock = threading.Lock()
@@ -564,6 +575,8 @@ def stop_service_process(task_id: int, service_type: str):
         task.run_status = 'stopped'
         db.session.commit()
 
+    _stop_post_process_cluster(task_id, task)
+
     with _daemons_lock:
         if task_id in _running_daemons:
             daemon = _running_daemons[task_id]
@@ -605,7 +618,12 @@ def restart_task_services(task_id: int) -> bool:
     task = AlgorithmTask.query.get(task_id)
     if task and _use_remote_deploy(task):
         _stop_remote_task(task_id, task.node_id)
+        _stop_post_process_cluster(task_id, task)
         success, _, _ = _deploy_task_on_remote_node(task_id, task)
+        if success:
+            task = AlgorithmTask.query.get(task_id)
+            if task:
+                _start_post_process_cluster(task)
         return success
 
     with _daemons_lock:
@@ -653,8 +671,12 @@ def start_task_services(task_id: int, task: AlgorithmTask) -> Tuple[bool, str, b
             if _use_remote_deploy(task):
                 if task.node_id:
                     logger.info('任务 %s 已在远程节点 %s 运行，跳过重复部署', task_id, task.node_id)
-                    return (True, '任务已在远程节点运行', True)
-                return _deploy_task_on_remote_node(task_id, task)
+                    ok_pp, _ = _start_post_process_cluster(task)
+                    return (True, '任务已在远程节点运行', True) if ok_pp else (False, '后处理集群启动失败', False)
+                result = _deploy_task_on_remote_node(task_id, task)
+                if result[0]:
+                    _start_post_process_cluster(task)
+                return result
 
             ok, sync_msg = _ensure_task_models_on_cluster(task)
             if not ok:
@@ -773,6 +795,7 @@ def start_task_services(task_id: int, task: AlgorithmTask) -> Tuple[bool, str, b
                 'patrol': '巡检算法',
             }.get(task.task_type, task.task_type)
             logger.info(f"✅ 任务 {task_id} 的{task_type_name}服务启动成功（守护进程已启动）")
+            _start_post_process_cluster(task)
             return (True, "启动成功", False)
         else:
             # 未知的任务类型

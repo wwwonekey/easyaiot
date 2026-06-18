@@ -955,6 +955,11 @@ class AlgorithmTask(db.Model):
     # SAM 补充识别配置
     sam_supplement_enabled = db.Column(db.Boolean, default=False, nullable=False, comment='是否启用 SAM 补充识别')
     sam_supplement_config = db.Column(db.Text, nullable=True, comment='SAM 补充配置 JSON')
+
+    # AI 后处理（用户 Python 脚本）
+    post_process_enabled = db.Column(db.Boolean, default=False, nullable=False, comment='是否启用 AI 后处理脚本')
+    post_process_script = db.Column(db.String(255), nullable=True, comment='后处理脚本文件名，默认 post_process.py')
+    post_process_replicas = db.Column(db.Integer, default=1, nullable=False, comment='后处理 Worker 副本数（集群水平扩展）')
     
     # 布防时段配置
     defense_mode = db.Column(db.String(20), default='half', nullable=False, comment='布防模式[full:全防模式,half:半防模式,day:白天模式,night:夜间模式]')
@@ -1096,8 +1101,52 @@ class AlgorithmTask(db.Model):
             'algorithm_services': algorithm_services_list,  # 添加算法模型服务列表
             'sam_supplement_enabled': bool(self.sam_supplement_enabled),
             'sam_supplement_config': json.loads(self.sam_supplement_config) if self.sam_supplement_config else None,
+            'post_process_enabled': bool(self.post_process_enabled),
+            'post_process_script': self.post_process_script,
+            'post_process_replicas': int(self.post_process_replicas or 1),
             'created_at': utc_isoformat_z(self.created_at),
             'updated_at': utc_isoformat_z(self.updated_at)
+        }
+
+
+class AlgorithmPostProcessResult(db.Model):
+    """算法任务 AI 后处理结果（由 Kafka 消费者异步写入）"""
+    __tablename__ = 'algorithm_post_process_result'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    task_id = db.Column(db.Integer, nullable=False, index=True, comment='算法任务ID')
+    task_name = db.Column(db.String(255), nullable=True, comment='任务名称')
+    task_code = db.Column(db.String(255), nullable=True, comment='任务编号')
+    task_type = db.Column(db.String(20), nullable=True, comment='任务类型[realtime,snap,patrol]')
+    device_id = db.Column(db.String(100), nullable=False, index=True, comment='设备ID')
+    device_name = db.Column(db.String(100), nullable=True, comment='设备名称')
+    frame_number = db.Column(db.Integer, nullable=True, comment='帧序号')
+    event_time = db.Column(db.DateTime(timezone=True), nullable=True, index=True, comment='帧事件时间')
+    counts = db.Column(db.Text, nullable=True, comment='计数结果 JSON')
+    events = db.Column(db.Text, nullable=True, comment='业务事件 JSON')
+    alerts = db.Column(db.Text, nullable=True, comment='自定义告警 JSON')
+    payload = db.Column(db.Text, nullable=True, comment='完整后处理结果 JSON')
+    correlation_id = db.Column(db.String(36), nullable=True, index=True, comment='关联ID（去重/追溯）')
+    created_at = db.Column(db.DateTime, default=lambda: datetime.utcnow(), index=True)
+
+    def to_dict(self):
+        import json
+        return {
+            'id': self.id,
+            'task_id': self.task_id,
+            'task_name': self.task_name,
+            'task_code': self.task_code,
+            'task_type': self.task_type,
+            'device_id': self.device_id,
+            'device_name': self.device_name,
+            'frame_number': self.frame_number,
+            'event_time': utc_isoformat_z(self.event_time),
+            'counts': json.loads(self.counts) if self.counts else None,
+            'events': json.loads(self.events) if self.events else None,
+            'alerts': json.loads(self.alerts) if self.alerts else None,
+            'payload': json.loads(self.payload) if self.payload else None,
+            'correlation_id': self.correlation_id,
+            'created_at': utc_isoformat_z(self.created_at),
         }
 
 
@@ -2056,3 +2105,29 @@ def ensure_algorithm_task_sam_columns(engine):
             log.info('已为 algorithm_task 表添加 %s 列', col)
     except Exception as e:
         log.warning('ensure_algorithm_task_sam_columns: %s', e)
+
+
+def ensure_algorithm_task_post_process_columns(engine):
+    """老库 algorithm_task 表补 AI 后处理列。"""
+    import logging
+    from sqlalchemy import inspect, text
+
+    log = logging.getLogger(__name__)
+    columns = {
+        'post_process_enabled': 'BOOLEAN DEFAULT FALSE',
+        'post_process_script': 'VARCHAR(255)',
+        'post_process_replicas': 'INTEGER DEFAULT 1',
+    }
+    try:
+        inspector = inspect(engine)
+        if 'algorithm_task' not in inspector.get_table_names():
+            return
+        col_names = {c['name'] for c in inspector.get_columns('algorithm_task')}
+        for col, ddl in columns.items():
+            if col in col_names:
+                continue
+            with engine.begin() as conn:
+                conn.execute(text(f'ALTER TABLE algorithm_task ADD COLUMN {col} {ddl}'))
+            log.info('已为 algorithm_task 表添加 %s 列', col)
+    except Exception as e:
+        log.warning('ensure_algorithm_task_post_process_columns: %s', e)

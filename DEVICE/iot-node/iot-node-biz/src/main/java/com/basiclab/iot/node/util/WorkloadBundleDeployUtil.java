@@ -63,6 +63,8 @@ public final class WorkloadBundleDeployUtil {
                 return "requirements-node-ai-service.txt";
             case MODEL_TRAIN:
                 return "requirements-node-model-train.txt";
+            case POST_PROCESS:
+                return "requirements-node-post-process.txt";
             default:
                 throw new IllegalArgumentException("unknown bundle: " + bundle);
         }
@@ -109,6 +111,13 @@ public final class WorkloadBundleDeployUtil {
                 return syncAutoLabelRelativePaths();
             case MODEL_TRAIN:
                 return syncModelTrainRelativePaths();
+            case POST_PROCESS:
+                return Arrays.asList(
+                        "models.py",
+                        "app",
+                        "services/post_process_worker",
+                        "services/post_process_sink_worker"
+                );
             default:
                 return Collections.emptyList();
         }
@@ -131,6 +140,8 @@ public final class WorkloadBundleDeployUtil {
                 return "services/auto_label_worker/run_worker.py";
             case MODEL_TRAIN:
                 return "services/train_worker/run_worker.py";
+            case POST_PROCESS:
+                return "services/post_process_worker/run_worker.py";
             default:
                 return "";
         }
@@ -153,6 +164,8 @@ public final class WorkloadBundleDeployUtil {
                 return launcher + " -c \"import flask, cv2, numpy, onnxruntime; print('OK')\"";
             case MODEL_TRAIN:
                 return launcher + " -c \"import torch, ultralytics, yaml; print('OK')\"";
+            case POST_PROCESS:
+                return launcher + " -c \"import flask, sqlalchemy, kafka; print('OK')\"";
             default:
                 return launcher + " -c \"print('OK')\"";
         }
