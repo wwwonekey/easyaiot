@@ -102,6 +102,9 @@ VIDEO/face_capture_head_yolov8.onnx
 # AI 模型权重（大文件由 ModelScope 或安装脚本下载，不随仓库分发）
 AI/models/
 
+# APP npm 依赖（与 APP/.gitignore 中 node_modules 一致）
+APP/node_modules/
+
 # IDE / 包管理器缓存 / 测试缓存（仅本机，不随仓库分发）
 .vscode/
 .pnpm-store/
