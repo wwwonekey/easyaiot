@@ -114,7 +114,6 @@ Many intelligent IoT projects stall at deployment: <strong>full features won't f
   <li><strong>Alarm Recording</strong>: Supports automatic recording triggered by alarm events. When abnormal events are detected, relevant video clips are automatically recorded, providing a complete alarm evidence chain. Supports viewing, downloading, and management of alarm recordings</li>
   <li><strong>Alarm Events</strong>: Provides comprehensive alarm event management functionality, supporting real-time alarm event push, historical query, statistical analysis, event processing, and status tracking, achieving full lifecycle management of alarms</li>
   <li><strong>Video Playback</strong>: Supports fast retrieval and playback of historical recordings, providing convenient operations such as timeline positioning, variable speed playback, and keyframe jumping. Supports synchronized playback of multiple video streams, meeting event backtracking and analysis needs</li>
-  <li><strong>Mobile APP Admin Console</strong>: A cross-platform mobile admin console built on uni-app 3, compiling one codebase to H5, WeChat Mini Program, and native App. Shares the same backend API (<code>/admin-api</code>) as the PC (WEB) client, enabling ops and management staff to control the platform anytime, anywhere from mobile devices. Core tabs cover <strong>Devices</strong> (unified list and channel browsing for direct cameras, GB28181, and NVR; one-tap live preview in device details), <strong>Stream Forwarding</strong> (task creation, start/stop, cluster node status, and multi-stream URL viewing), <strong>Algorithms</strong> (real-time/snapshot algorithm task list, start/stop control, and detection stats), <strong>Alerts</strong> (alert search, snapshot preview, and alarm recording VOD playback), <strong>Models</strong> (model list and deployment status), <strong>Inference</strong> (mobile image inference workbench: pick model, upload image, view results), <strong>Training</strong> (training task progress monitoring and one-tap stop), and <strong>Profile</strong> (personal info, account security, multi-tenant switching, and app settings). H5 integrates the Jessibuca low-latency player for FLV/HLS live streams and alarm recording VOD; OAuth2 dual-token auth with Pinia state persistence keeps sessions alive automatically—bringing cloud-edge-device intelligent control to phones and mini programs</li>
 </ul>
 
 #### 🌐 IoT Capabilities
@@ -128,6 +127,23 @@ Many intelligent IoT projects stall at deployment: <strong>full features won't f
   <li><strong>Data Collection and Storage</strong>: Device data collection, storage, query, and analysis</li>
   <li><strong>Device Status Monitoring and Alert Management</strong>: Real-time monitoring, anomaly alerts, intelligent decision-making</li>
   <li><strong>Notification Management</strong>: Supports 7 notification methods including Feishu, DingTalk, Enterprise WeChat, Email, Tencent Cloud SMS, Alibaba Cloud SMS, and Webhook, enabling flexible and multi-channel alert notifications</li>
+</ul>
+
+#### 📱 Mobile APP
+
+<ul style="font-size: 14px; line-height: 1.8; color: #444; margin: 10px 0;">
+  <li><strong>Multi-Channel Access</strong>: Available on phones, mini programs, and apps—ops and management are no longer tied to a desk; handle issues on-site in real time</li>
+  <li><strong>Capability Parity</strong>: Mobile matches the PC admin console feature-for-feature; switch devices without losing control</li>
+  <li><strong>Device Management</strong>: Unified management across access methods; browse channels at a glance and tap for live view—stay informed during field inspections</li>
+  <li><strong>Stream Forwarding</strong>: Create and stop forwarding tasks anytime; monitor cluster nodes and stream status—schedule video resources remotely</li>
+  <li><strong>Algorithm Tasks</strong>: Start and stop real-time and snapshot tasks on the go; track detection results without waiting to get back to the office</li>
+  <li><strong>Alert Center</strong>: Search alerts instantly; tap to view snapshots and recordings—verify and follow up while on mobile duty</li>
+  <li><strong>Model Management</strong>: Deployment status at a glance; always know what's live</li>
+  <li><strong>Model Inference</strong>: Upload an image on-site and get results immediately—spot checks without returning to PC</li>
+  <li><strong>Model Training</strong>: Monitor training progress anytime; stop remotely when needed to avoid wasted compute</li>
+  <li><strong>Personal Center</strong>: Account, tenant, and app preferences in one place—convenient across devices</li>
+  <li><strong>Smooth Viewing</strong>: Live feeds and alarm recordings play smoothly on mobile—low latency, no stutter, uncompromised duty experience</li>
+  <li><strong>Stay Connected</strong>: Sessions stay active with less re-login—bringing cloud-edge-device intelligent control to phones and mini programs</li>
 </ul>
 
 ### 📦 Built-in AI Models
@@ -257,9 +273,9 @@ EasyAIoT consists of seven core projects:
 <td style="padding: 15px; border: 1px solid #e0e0e0; vertical-align: top;"><strong>APP Module</strong></td>
 <td style="padding: 15px; border: 1px solid #e0e0e0; line-height: 1.8; color: #444;">
   <ul style="margin: 5px 0; padding-left: 20px;">
-    <li><strong>Cross-platform Framework</strong>: Built on uni-app 3 + Vue 3 + TypeScript + Vite; one codebase compiles to H5, WeChat Mini Program, and native App</li>
-    <li><strong>API Reuse</strong>: Shares <code>/admin-api</code> backend with the WEB module; OAuth2 dual-token auth with multi-tenant switching</li>
-    <li><strong>Device Management</strong>: Unified list for direct cameras, GB28181, and NVR; online status and channel browsing; live preview in device details (H5 integrates Jessibuca low-latency player)</li>
+    <li><strong>Multi-Channel Access</strong>: One build, multiple touchpoints—phones, mini programs, and apps</li>
+    <li><strong>Capability Parity</strong>: Matches PC admin console capabilities with multi-tenant switching</li>
+    <li><strong>Device Management</strong>: Unified management for direct cameras, GB28181, and NVR; online status and channel browsing with one-tap live preview in device details</li>
     <li><strong>Stream Forwarding</strong>: Task creation, start/stop, cluster node status, and multi-stream URL viewing</li>
     <li><strong>Algorithm Tasks</strong>: Real-time/snapshot algorithm task list, start/stop control, and detection/frame stats</li>
     <li><strong>Alert Center</strong>: Alert search, snapshot preview, and alarm recording VOD playback</li>

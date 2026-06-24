@@ -114,7 +114,6 @@ Beaucoup de projets IoT intelligents butent au déploiement : <strong>les foncti
   <li><strong>Enregistrement vidéo d'alerte</strong> : Prend en charge la fonction d'enregistrement vidéo automatique déclenché par les événements d'alerte. Enregistre automatiquement les séquences vidéo pertinentes lors de la détection d'événements anormaux, fournissant une chaîne de preuves complète pour les alertes. Prend en charge la visualisation, le téléchargement et la gestion des enregistrements d'alerte.</li>
   <li><strong>Événements d'alerte</strong> : Fournit une fonctionnalité complète de gestion des événements d'alerte, prenant en charge la notification en temps réel, la consultation historique, l'analyse statistique, le traitement des événements et le suivi de l'état, réalisant une gestion du cycle de vie complet des alertes.</li>
   <li><strong>Relecture des enregistrements</strong> : Prend en charge la recherche rapide et la relecture des enregistrements historiques. Offre des opérations pratiques comme la navigation par timeline, la lecture à vitesse variable, le saut vers les images clés. Prend en charge la relecture synchronisée de multiples flux vidéo, répondant aux besoins de revue et d'analyse d'événements.</li>
-  <li><strong>Console d'administration mobile APP</strong> : Console d'administration mobile multiplateforme basée sur uni-app 3, un seul code source compilé en H5, mini-programme WeChat et App native, partageant la même API backend (<code>/admin-api</code>) que le client PC (WEB). Permet aux équipes d'exploitation et de gestion de contrôler la plateforme à tout moment et en tout lieu. Les onglets principaux couvrent <strong>Appareils</strong> (liste unifiée et navigation des canaux pour caméras directes, GB28181 et NVR ; aperçu en direct en un clic dans les détails), <strong>Relais de flux</strong> (création de tâches, démarrage/arrêt, état des nœuds de cluster et consultation des URL multi-flux), <strong>Algorithmes</strong> (liste des tâches temps réel/instantané, contrôle démarrage/arrêt et statistiques de détection), <strong>Alertes</strong> (recherche d'alertes, aperçu des captures et relecture VOD des enregistrements d'alerte), <strong>Modèles</strong> (liste et statut de déploiement), <strong>Inférence</strong> (atelier d'inférence d'images mobile : choisir le modèle, envoyer l'image, voir les résultats), <strong>Entraînement</strong> (suivi de progression et arrêt en un clic) et <strong>Profil</strong> (informations personnelles, sécurité du compte, changement de locataire et paramètres). H5 intègre le lecteur basse latence Jessibuca pour les flux FLV/HLS en direct et la VOD des enregistrements d'alerte ; authentification OAuth2 double token avec persistance Pinia pour le renouvellement automatique des sessions — portant le contrôle intelligent cloud-bord-périphérique jusqu'au téléphone et au mini-programme</li>
 </ul>
 
 #### 🌐 Capacités IoT
@@ -128,6 +127,23 @@ Beaucoup de projets IoT intelligents butent au déploiement : <strong>les foncti
   <li><strong>Collecte et stockage des données</strong> : Collecte, stockage, requête et analyse des données des appareils.</li>
   <li><strong>Surveillance d'état des appareils et gestion des alertes</strong> : Surveillance en temps réel, alertes d'anomalies, prise de décision intelligente.</li>
   <li><strong>Gestion des notifications</strong> : Prend en charge 7 méthodes de notification, notamment Feishu, DingTalk, Enterprise WeChat, Email, Tencent Cloud SMS, Alibaba Cloud SMS et Webhook, permettant des notifications d'alerte flexibles et multi-canaux.</li>
+</ul>
+
+#### 📱 APP mobile
+
+<ul style="font-size: 14px; line-height: 1.8; color: #444; margin: 10px 0;">
+  <li><strong>Accès multi-canal</strong> : Disponible sur téléphone, mini-programme et App — l'exploitation et la gestion ne sont plus liées au poste de travail ; agir sur le terrain en temps réel</li>
+  <li><strong>Parité des capacités</strong> : Les mêmes fonctions métier que la console PC ; changez d'appareil sans perdre le contrôle</li>
+  <li><strong>Gestion des appareils</strong> : Tous les modes d'accès unifiés ; listes et canaux en un coup d'œil, aperçu en direct en un clic — restez informé en tournée</li>
+  <li><strong>Relais de flux</strong> : Créez et arrêtez des tâches à tout moment ; suivez les nœuds de cluster et l'état des flux — planifiez les ressources vidéo à distance</li>
+  <li><strong>Tâches algorithmiques</strong> : Démarrez et arrêtez les tâches temps réel et instantané en mobilité ; suivez les résultats sans attendre le retour au bureau</li>
+  <li><strong>Centre d'alertes</strong> : Recherchez les alertes instantanément ; captures et enregistrements en un clic — vérifiez et suivez en astreinte mobile</li>
+  <li><strong>Gestion des modèles</strong> : Statut de déploiement visible d'un coup d'œil ; progressez en toute confiance</li>
+  <li><strong>Inférence de modèles</strong> : Envoyez une image sur le terrain et obtenez le résultat immédiatement — contrôles ponctuels sans retourner au PC</li>
+  <li><strong>Entraînement de modèles</strong> : Suivez la progression à tout moment ; arrêtez à distance si besoin pour éviter le gaspillage de calcul</li>
+  <li><strong>Centre personnel</strong> : Compte, locataire et préférences centralisés — pratique sur tous les terminaux</li>
+  <li><strong>Visionnage fluide</strong> : Flux en direct et enregistrements d'alerte fluides sur mobile — faible latence, sans saccades, expérience d'astreinte préservée</li>
+  <li><strong>Connexion continue</strong> : Session maintenue automatiquement, moins de reconnexions — le contrôle intelligent cloud-bord-périphérique atteint téléphone et mini-programme</li>
 </ul>
 
 ### 📦 Modèles IA intégrés
@@ -257,9 +273,9 @@ EasyAIoT est composé de sept projets principaux :
 <td style="padding: 15px; border: 1px solid #e0e0e0; vertical-align: top;"><strong>Module APP</strong></td>
 <td style="padding: 15px; border: 1px solid #e0e0e0; line-height: 1.8; color: #444;">
   <ul style="margin: 5px 0; padding-left: 20px;">
-    <li><strong>Framework multiplateforme</strong> : Basé sur uni-app 3 + Vue 3 + TypeScript + Vite ; un code source pour H5, mini-programme WeChat et App native</li>
-    <li><strong>Réutilisation API</strong> : Partage l'API backend <code>/admin-api</code> avec le module WEB ; authentification OAuth2 double token et changement de locataire</li>
-    <li><strong>Gestion des appareils</strong> : Liste unifiée pour caméras directes, GB28181 et NVR ; statut en ligne et navigation des canaux ; aperçu en direct dans les détails (H5 intègre le lecteur basse latence Jessibuca)</li>
+    <li><strong>Accès multi-canal</strong> : Un seul développement, plusieurs terminaux — téléphone, mini-programme et App</li>
+    <li><strong>Parité des capacités</strong> : Mêmes fonctions métier que la console PC, avec changement de locataire</li>
+    <li><strong>Gestion des appareils</strong> : Caméras directes, GB28181 et NVR unifiés ; statut en ligne, navigation des canaux et aperçu en direct en un clic</li>
     <li><strong>Relais de flux</strong> : Création de tâches, démarrage/arrêt, état des nœuds de cluster et consultation des URL multi-flux</li>
     <li><strong>Tâches algorithmiques</strong> : Liste temps réel/instantané, contrôle démarrage/arrêt et statistiques de détection/trames</li>
     <li><strong>Centre d'alertes</strong> : Recherche d'alertes, aperçu des captures et relecture VOD des enregistrements d'alerte</li>
