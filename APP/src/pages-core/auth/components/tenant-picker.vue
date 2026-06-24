@@ -1,18 +1,18 @@
 <template>
   <view v-if="tenantEnabled" class="input-item">
-    <wd-icon name="home" size="20px" color="#1890ff" />
-    <view class="ml-16rpx flex flex-1 items-center justify-between" @click="pickerVisible.tenantId = true">
+    <wd-icon name="home" size="20px" color="#266cfb" />
+    <view class="ml-16rpx flex flex-1 items-center justify-between" @click="pickerVisible = true">
       <text class="text-28rpx text-[#333]">
-        {{ getWotPickerDisplay(tenantList, tenantId, { valueKey: 'id', labelKey: 'name', placeholder: '请选择租户' }) }}
+        {{ displayTenantName }}
       </text>
     </view>
     <wd-picker
-      v-model:visible="pickerVisible.tenantId"
+      v-model:visible="pickerVisible"
       :model-value="tenantId"
       :columns="tenantList"
       label-key="name"
       value-key="id"
-      @confirm="({ value }) => handleTenantConfirm(value[0])"
+      @confirm="handleTenantConfirm"
     />
   </view>
 </template>
@@ -33,50 +33,84 @@ const userStore = useUserStore()
 
 const tenantEnabled = computed(
   () => import.meta.env.VITE_APP_TENANT_ENABLE === 'true',
-) // 租户开关：通过环境变量控制
-const tenantList = ref<TenantVO[]>([]) // 租户列表数据
-const pickerVisible = ref<Record<string, boolean>>({})
+)
+const tenantList = ref<TenantVO[]>([])
+const pickerVisible = ref(false)
+
+const defaultTenantId = Number(import.meta.env.VITE_APP_DEFAULT_LOGIN_TENANT_ID) || undefined
 
 const tenantId = computed(
-  () =>
-    userStore.tenantId
-    || Number(import.meta.env.VITE_APP_DEFAULT_LOGIN_TENANT_ID)
-    || undefined,
-) // 当前选中的租户
+  () => userStore.tenantId || defaultTenantId || undefined,
+)
+
+const displayTenantName = computed(() =>
+  getWotPickerDisplay(tenantList.value, tenantId.value, {
+    valueKey: 'id',
+    labelKey: 'name',
+    placeholder: '请选择租户',
+  }),
+)
+
+function getDefaultTenantFallback(): TenantVO[] {
+  if (!defaultTenantId) {
+    return []
+  }
+  return [{ id: defaultTenantId, name: '默认租户' }]
+}
+
+/** 登录页初始化默认租户，确保后续请求携带 tenant-id */
+function ensureDefaultTenantSelected() {
+  if (!tenantEnabled.value || userStore.tenantId) {
+    return
+  }
+  if (defaultTenantId) {
+    userStore.setTenantId(defaultTenantId)
+  }
+}
 
 /** 获取租户列表，并根据域名/appId 自动选中租户 */
 async function fetchTenantList() {
   if (!tenantEnabled.value) {
     return
   }
-  try {
-    // 1. 并行获取租户列表和域名对应的租户
-    const websiteTenantPromise = fetchTenantByWebsite()
-    const list = await getTenantSimpleList()
-    tenantList.value = list || []
 
-    // 2. 确定选中的租户：域名/appId > store 中的租户 > 列表第一个
+  ensureDefaultTenantSelected()
+
+  try {
+    const websiteTenantPromise = fetchTenantByWebsite()
+    let list: TenantVO[] = []
+    try {
+      list = await getTenantSimpleList() || []
+    }
+    catch (error) {
+      console.warn('获取租户列表失败，使用默认租户:', error)
+      list = getDefaultTenantFallback()
+    }
+    tenantList.value = list
+
     let selectedTenantId: number | null = null
-    // 2.1 优先使用域名/appId 对应的租户
     const websiteTenant = await websiteTenantPromise
     if (websiteTenant?.id) {
       selectedTenantId = websiteTenant.id
     }
-    // 2.2 如果没有从域名获取到，使用 store 中的租户
     if (!selectedTenantId && userStore.tenantId) {
       selectedTenantId = userStore.tenantId
     }
-    // 2.3 如果还是没有，使用列表第一个
     if (!selectedTenantId && tenantList.value.length > 0) {
       selectedTenantId = tenantList.value[0].id
     }
+    if (!selectedTenantId && defaultTenantId) {
+      selectedTenantId = defaultTenantId
+    }
 
-    // 3. 设置选中的租户
     if (selectedTenantId && selectedTenantId !== userStore.tenantId) {
       userStore.setTenantId(selectedTenantId)
     }
-  } catch (error) {
+  }
+  catch (error) {
     console.error('获取租户列表失败:', error)
+    tenantList.value = getDefaultTenantFallback()
+    ensureDefaultTenantSelected()
   }
 }
 
@@ -86,14 +120,12 @@ async function fetchTenantByWebsite(): Promise<TenantVO | null> {
     let website: string | null = null
 
     // #ifdef H5
-    // H5 环境：使用域名
     if (window?.location?.hostname) {
       website = window.location.hostname
     }
     // #endif
 
     // #ifdef MP
-    // 小程序环境：使用 appId
     const appId = uni.getAccountInfoSync?.()?.miniProgram?.appId
     if (appId) {
       website = appId
@@ -103,21 +135,20 @@ async function fetchTenantByWebsite(): Promise<TenantVO | null> {
     if (website) {
       return await getTenantByWebsite(website)
     }
-  } catch (error) {
-    // 域名未配置租户时会报错，忽略即可
+  }
+  catch (error) {
     console.debug('根据域名获取租户失败:', error)
   }
   return null
 }
 
-/** 切换当前租户 */
-function handleTenantConfirm(value?: number | string) {
-  if (value !== undefined && value !== '') {
-    userStore.setTenantId(Number(value))
+function handleTenantConfirm({ value }: { value: Array<number | string> }) {
+  const nextId = Number(value[0])
+  if (nextId) {
+    userStore.setTenantId(nextId)
   }
 }
 
-/** 校验租户是否已选择 */
 function validate(): boolean {
   if (!tenantEnabled.value) {
     return true
@@ -129,7 +160,6 @@ function validate(): boolean {
   return true
 }
 
-/** 页面加载时获取租户列表 */
 onMounted(() => {
   fetchTenantList()
 })

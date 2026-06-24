@@ -67,9 +67,10 @@ const httpInterceptor = {
       options.header.Authorization = `Bearer ${token}`
     }
 
-    // 4. 添加租户标识
+    // 4. 添加租户标识（登录前使用默认租户，便于拉取租户列表等公开接口）
     if (tenantEnable && tenantEnable === 'true') {
-      const tenantId = useUserStore().tenantId
+      const defaultTenantId = Number(import.meta.env.VITE_APP_DEFAULT_LOGIN_TENANT_ID)
+      const tenantId = useUserStore().tenantId || defaultTenantId || null
       if (tenantId) {
         options.header['tenant-id'] = tenantId
       }
