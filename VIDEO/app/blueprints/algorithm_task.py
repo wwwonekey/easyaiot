@@ -93,6 +93,7 @@ def create_task():
             tracking_smooth_alpha=data.get('tracking_smooth_alpha', 0.25),
             alert_event_enabled=data.get('alert_event_enabled', False),
             alert_event_suppress_time=data.get('alert_event_suppress_time', 5),
+            alert_class_names=data.get('alert_class_names'),
             face_detection_enabled=data.get(
                 'face_detection_enabled',
                 data.get('face_matching_enabled', True),

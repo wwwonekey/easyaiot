@@ -1558,6 +1558,12 @@ def try_send_alert_for_detections(
     log_suffix: str = "",
 ) -> None:
     """在具备真实检测结果时按抑制策略发送告警（用于输出帧或检测迟达补发）。"""
+    from app.utils.alert_class_filter import filter_detections_for_alert, get_task_alert_class_names
+
+    detections = filter_detections_for_alert(
+        detections,
+        get_task_alert_class_names(task_config),
+    )
     if not detections or not task_config or not task_config.alert_event_enabled:
         return
     current_time = time.time()

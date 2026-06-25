@@ -73,6 +73,12 @@ def _serialize_matching_business_tags(tags) -> Optional[str]:
     return json.dumps(parsed, ensure_ascii=False) if parsed else None
 
 
+def _serialize_alert_class_names(class_names) -> Optional[str]:
+    from app.utils.alert_class_filter import parse_alert_class_names
+    parsed = parse_alert_class_names(class_names)
+    return json.dumps(parsed, ensure_ascii=False) if parsed else None
+
+
 def _normalize_library_ids(ids) -> List[int]:
     if ids is None:
         return []
@@ -453,6 +459,7 @@ def create_algorithm_task(task_name: str,
                          tracking_smooth_alpha: float = 0.25,
                          alert_event_enabled: bool = False,
                          alert_event_suppress_time: int = 5,
+                         alert_class_names=None,
                          face_detection_enabled: bool = True,
                          plate_detection_enabled: bool = False,
                          face_matching_enabled: bool = False,
@@ -485,6 +492,10 @@ def create_algorithm_task(task_name: str,
         # 验证任务类型
         if task_type not in ['realtime', 'snap', 'patrol']:
             raise ValueError(f"无效的任务类型: {task_type}，必须是 'realtime'、'snap' 或 'patrol'")
+
+        from app.utils.alert_class_filter import parse_alert_class_names
+        if alert_event_enabled and not parse_alert_class_names(alert_class_names):
+            raise ValueError('启用告警事件时必须指定至少一个告警触发标签')
         
         device_id_list = device_ids or []
         
@@ -714,6 +725,7 @@ def create_algorithm_task(task_name: str,
             tracking_smooth_alpha=tracking_smooth_alpha if task_type == 'realtime' else 0.25,
             alert_event_enabled=alert_event_enabled,
             alert_event_suppress_time=alert_event_suppress_time,
+            alert_class_names=_serialize_alert_class_names(alert_class_names),
             face_detection_enabled=face_detection_enabled,
             plate_detection_enabled=plate_detection_enabled,
             face_matching_enabled=face_matching_enabled if task_type != 'patrol' else False,
@@ -901,7 +913,7 @@ def update_algorithm_task(task_id: int, **kwargs) -> AlgorithmTask:
             'model_ids', 'model_names',  # 模型配置
             'extract_interval',  # 实时算法任务配置（rtmp_input_url和rtmp_output_url不再使用，从摄像头列表获取）
             'tracking_enabled', 'tracking_similarity_threshold', 'tracking_max_age', 'tracking_smooth_alpha',  # 追踪配置
-            'alert_event_enabled', 'alert_event_suppress_time',
+            'alert_event_enabled', 'alert_event_suppress_time', 'alert_class_names',
             'face_detection_enabled', 'plate_detection_enabled',
             'face_matching_enabled', 'face_library_ids', 'face_matching_threshold',
             'plate_matching_enabled', 'plate_library_ids',
@@ -971,6 +983,20 @@ def update_algorithm_task(task_id: int, **kwargs) -> AlgorithmTask:
 
         if 'matching_business_tags' in kwargs:
             kwargs['matching_business_tags'] = _serialize_matching_business_tags(kwargs['matching_business_tags'])
+
+        if 'alert_class_names' in kwargs:
+            kwargs['alert_class_names'] = _serialize_alert_class_names(kwargs['alert_class_names'])
+
+        if 'alert_event_enabled' in kwargs or 'alert_class_names' in kwargs:
+            from app.utils.alert_class_filter import parse_alert_class_names
+            alert_enabled = kwargs.get('alert_event_enabled', task.alert_event_enabled)
+            if alert_enabled:
+                if 'alert_class_names' in kwargs:
+                    alert_names = parse_alert_class_names(kwargs.get('alert_class_names'))
+                else:
+                    alert_names = task._parse_alert_class_names()
+                if not alert_names:
+                    raise ValueError('启用告警事件时必须指定至少一个告警触发标签')
         
         # 处理告警通知配置（如果是字典或字符串，需要转换为JSON字符串）
         # 在保存前，从消息模板中提取通知人信息并保存到配置中

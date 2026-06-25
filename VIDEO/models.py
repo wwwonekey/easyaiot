@@ -918,6 +918,7 @@ class AlgorithmTask(db.Model):
     # 告警事件配置
     alert_event_enabled = db.Column(db.Boolean, default=False, nullable=False, comment='是否启用告警事件')
     alert_event_suppress_time = db.Column(db.Integer, default=5, nullable=False, comment='告警事件抑制时间（秒），同一设备两次上报告警事件的最小间隔，减轻Kafka积压，默认5秒')
+    alert_class_names = db.Column(db.Text, nullable=True, comment='告警触发类别标签（JSON数组，为空则任意检测均可触发告警）')
     face_detection_enabled = db.Column(db.Boolean, default=True, nullable=False, comment='是否启用人脸检测')
     plate_detection_enabled = db.Column(db.Boolean, default=True, nullable=False, comment='是否启用车牌检测')
     face_matching_enabled = db.Column(db.Boolean, default=False, nullable=False, comment='是否启用人脸匹配（默认关闭）')
@@ -1010,6 +1011,10 @@ class AlgorithmTask(db.Model):
         except Exception:
             return []
 
+    def _parse_alert_class_names(self):
+        from app.utils.alert_class_filter import parse_alert_class_names
+        return parse_alert_class_names(self.alert_class_names)
+
     @staticmethod
     def _parse_library_ids(raw) -> list:
         import json
@@ -1074,6 +1079,7 @@ class AlgorithmTask(db.Model):
             'tracking_smooth_alpha': self.tracking_smooth_alpha,
             'alert_event_enabled': self.alert_event_enabled,
             'alert_event_suppress_time': self.alert_event_suppress_time,
+            'alert_class_names': self._parse_alert_class_names(),
             'face_detection_enabled': self.face_detection_enabled,
             'plate_detection_enabled': self.plate_detection_enabled,
             'face_matching_enabled': self.face_matching_enabled,
@@ -2155,3 +2161,27 @@ def ensure_algorithm_task_post_process_columns(engine):
             log.info('已为 algorithm_task 表添加 %s 列', col)
     except Exception as e:
         log.warning('ensure_algorithm_task_post_process_columns: %s', e)
+
+
+def ensure_algorithm_task_alert_class_columns(engine):
+    """老库 algorithm_task 表补告警触发类别标签列。"""
+    import logging
+    from sqlalchemy import inspect, text
+
+    log = logging.getLogger(__name__)
+    columns = {
+        'alert_class_names': 'TEXT',
+    }
+    try:
+        inspector = inspect(engine)
+        if 'algorithm_task' not in inspector.get_table_names():
+            return
+        col_names = {c['name'] for c in inspector.get_columns('algorithm_task')}
+        for col, ddl in columns.items():
+            if col in col_names:
+                continue
+            with engine.begin() as conn:
+                conn.execute(text(f'ALTER TABLE algorithm_task ADD COLUMN {col} {ddl}'))
+            log.info('已为 algorithm_task 表添加 %s 列', col)
+    except Exception as e:
+        log.warning('ensure_algorithm_task_alert_class_columns: %s', e)
