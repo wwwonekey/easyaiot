@@ -5,7 +5,7 @@
 # 各业务模块宿主机缓存互不共享：
 #   ai / video  → pip-cache、pip-wheels
 #   device                      → m2/repository（Maven）
-#   web                         → pnpm-store、.build-stamp
+#   web / app                   → pnpm-store、.build-stamp
 #
 # 环境变量:
 #   BUILD_CACHE_UID  默认 1000
@@ -15,7 +15,7 @@
 : "${BUILD_CACHE_GID:=1000}"
 
 EASYAIOT_PYTHON_CACHE_MODULES=(ai video)
-EASYAIOT_BUILD_CACHE_MODULES=(ai video device web)
+EASYAIOT_BUILD_CACHE_MODULES=(ai video device web app)
 
 easyaiot_build_cache_base() {
     local root="${1:-${EASYAIOT_ROOT:-.}}"
@@ -25,7 +25,7 @@ easyaiot_build_cache_base() {
 easyaiot_normalize_module() {
     local module="${1,,}"
     case "$module" in
-        ai|video|device|web) echo "$module" ;;
+        ai|video|device|web|app) echo "$module" ;;
         *)
             echo "未知构建缓存模块: $1（支持: ${EASYAIOT_BUILD_CACHE_MODULES[*]}）" >&2
             return 1
@@ -87,18 +87,34 @@ maven_repository_dir_for() {
 
 pnpm_store_dir_for() {
     local root="${1:-${EASYAIOT_ROOT:-.}}"
+    local module="${2:-web}"
     local store
-    store="$(module_cache_root "$root" web)/pnpm-store"
+    module="$(easyaiot_normalize_module "$module")" || return 1
+    store="$(module_cache_root "$root" "$module")/pnpm-store"
     mkdir -p "$store"
     echo "$store"
 }
 
-web_build_stamp_file() {
+build_stamp_file_for() {
     local root="${1:-${EASYAIOT_ROOT:-.}}"
+    local module="${2:-web}"
     local stamp
-    stamp="$(module_cache_root "$root" web)/.build-stamp"
+    module="$(easyaiot_normalize_module "$module")" || return 1
+    stamp="$(module_cache_root "$root" "$module")/.build-stamp"
     mkdir -p "$(dirname "$stamp")"
     echo "$stamp"
+}
+
+web_build_stamp_file() {
+    build_stamp_file_for "${1:-${EASYAIOT_ROOT:-.}}" web
+}
+
+app_build_stamp_file() {
+    build_stamp_file_for "${1:-${EASYAIOT_ROOT:-.}}" app
+}
+
+app_pnpm_store_dir() {
+    pnpm_store_dir_for "${1:-${EASYAIOT_ROOT:-.}}" app
 }
 
 # 兼容旧调用（默认 ai / device / web）
@@ -127,7 +143,7 @@ maven_repository_dir() {
 }
 
 pnpm_store_dir() {
-    pnpm_store_dir_for "$@"
+    pnpm_store_dir_for "${1:-${EASYAIOT_ROOT:-.}}" web
 }
 
 migrate_legacy_python_cache_if_needed() {
@@ -196,8 +212,10 @@ init_easyaiot_build_cache_dirs() {
     done
 
     maven_repository_dir_for "$root" >/dev/null
-    pnpm_store_dir_for "$root" >/dev/null
+    pnpm_store_dir_for "$root" web >/dev/null
+    pnpm_store_dir_for "$root" app >/dev/null
     web_build_stamp_file "$root" >/dev/null
+    app_build_stamp_file "$root" >/dev/null
 
     migrate_legacy_python_cache_if_needed "$root"
     migrate_legacy_device_web_cache_if_needed "$root"

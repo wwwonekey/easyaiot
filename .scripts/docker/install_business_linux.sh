@@ -3,7 +3,7 @@
 # ============================================
 # EasyAIoT 业务系统统一管理脚本
 # ============================================
-# 管理模块: DEVICE、AI、VIDEO、WEB（不含中间件）
+# 管理模块: DEVICE、AI、VIDEO、WEB、APP（不含中间件；APP 仅 full 全量形态）
 # 各模块实际逻辑委托给对应目录下的 install_linux.sh
 #
 # 用法:
@@ -53,13 +53,14 @@ ensure_platform_agent_after_business_stack() {
 }
 
 # 业务模块（按依赖顺序：网关/微服务 -> AI/视频 -> 前端）
-ALL_MODULES=(DEVICE AI VIDEO WEB)
+ALL_MODULES=(DEVICE AI VIDEO WEB APP)
 
 declare -A MODULE_NAMES=(
     [DEVICE]="Device 服务"
     [AI]="AI 服务"
     [VIDEO]="Video 服务"
     [WEB]="Web 前端"
+    [APP]="App 移动端 H5"
 )
 
 declare -A MODULE_PORTS=(
@@ -67,6 +68,7 @@ declare -A MODULE_PORTS=(
     [AI]="5000"
     [VIDEO]="6000"
     [WEB]="8888"
+    [APP]="9010"
 )
 
 declare -A MODULE_HEALTH_ENDPOINTS=(
@@ -74,6 +76,7 @@ declare -A MODULE_HEALTH_ENDPOINTS=(
     [AI]="/actuator/health"
     [VIDEO]="/actuator/health"
     [WEB]="/health"
+    [APP]="/health"
 )
 
 LOG_DIR="${SCRIPT_DIR}/logs"
@@ -299,12 +302,18 @@ normalize_module_name() {
 }
 
 resolve_modules() {
+    ensure_deploy_profile
     local tokens=("$@")
     local resolved=()
     local t norm
 
     if [ ${#tokens[@]} -eq 0 ]; then
-        SELECTED_MODULES=("${ALL_MODULES[@]}")
+        SELECTED_MODULES=()
+        local mod
+        for mod in "${ALL_MODULES[@]}"; do
+            module_enabled_for_deploy_profile "$mod" || continue
+            SELECTED_MODULES+=("$mod")
+        done
         return 0
     fi
 
@@ -313,6 +322,10 @@ resolve_modules() {
         if ! is_valid_module "$norm"; then
             print_error "未知模块: $t（可选: ${ALL_MODULES[*]}）"
             exit 1
+        fi
+        if ! module_enabled_for_deploy_profile "$norm"; then
+            print_warning "模块 $norm 在当前部署形态 ${EASYAIOT_DEPLOY_PROFILE:-full} 下不可用，已跳过"
+            continue
         fi
         resolved+=("$norm")
     done
@@ -507,7 +520,7 @@ usage() {
     cat <<EOF
 EasyAIoT 业务系统统一管理脚本
 
-管理模块: DEVICE、AI、VIDEO、WEB（不含 Nacos/PostgreSQL 等中间件）
+管理模块: DEVICE、AI、VIDEO、WEB、APP（不含 Nacos/PostgreSQL 等中间件；APP 仅 full）
 
 用法:
   $0 <命令> [选项] [模块...]
@@ -534,7 +547,7 @@ EasyAIoT 业务系统统一管理脚本
   --continue-on-error    某模块失败后继续执行其余模块
 
 模块:
-  未指定时默认全部，顺序为 DEVICE -> AI -> VIDEO -> WEB
+  未指定时默认全部（按部署形态过滤），顺序为 DEVICE -> AI -> VIDEO -> WEB -> APP
   stop / clean / clean-all 时自动逆序执行
 
 示例:

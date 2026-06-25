@@ -19,6 +19,9 @@ export interface AlgorithmTask {
   extract_interval?: number
   cron_expression?: string
   alert_event_enabled?: boolean
+  schedule_policy?: 'local' | 'auto' | 'node'
+  prefer_gpu?: boolean
+  target_node_id?: number | null
 }
 
 export interface AlgorithmTaskListResult {
@@ -58,6 +61,36 @@ export function stopAlgorithmTask(taskId: number) {
 /** 重启算法任务 */
 export function restartAlgorithmTask(taskId: number) {
   return http.post<AlgorithmTask>(`/video/algorithm/task/${taskId}/restart`, {})
+}
+
+export interface AlgorithmTaskPayload {
+  task_name: string
+  task_type?: 'realtime' | 'snap' | 'patrol'
+  device_ids?: string[]
+  model_ids?: number[]
+  schedule_policy?: 'local' | 'auto' | 'node'
+  prefer_gpu?: boolean
+  target_node_id?: number | null
+  extract_interval?: number
+  cron_expression?: string
+  patrol_interval_sec?: number
+  alert_event_enabled?: boolean
+  is_enabled?: boolean
+}
+
+/** 创建算法任务 */
+export function createAlgorithmTask(data: AlgorithmTaskPayload) {
+  return http.post<AlgorithmTask>('/video/algorithm/task', data, undefined, undefined, { hideErrorToast: true })
+}
+
+/** 更新算法任务 */
+export function updateAlgorithmTask(taskId: number, data: Partial<AlgorithmTaskPayload>) {
+  return http.put<AlgorithmTask>(`/video/algorithm/task/${taskId}`, data, undefined, undefined, { hideErrorToast: true })
+}
+
+/** 删除算法任务 */
+export function deleteAlgorithmTask(taskId: number) {
+  return http.delete(`/video/algorithm/task/${taskId}`)
 }
 
 export function getAlgorithmTaskTypeText(type?: string): string {

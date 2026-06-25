@@ -80,6 +80,7 @@ MODULES=(
     "AI"               # AI服务
     "VIDEO"            # Video服务
     "WEB"              # Web前端服务
+    "APP"              # App移动端H5（仅 full 全量形态）
 )
 
 # 模块名称映射
@@ -89,6 +90,7 @@ MODULE_NAMES["DEVICE"]="Device服务"
 MODULE_NAMES["AI"]="AI服务"
 MODULE_NAMES["VIDEO"]="Video服务"
 MODULE_NAMES["WEB"]="Web前端服务"
+MODULE_NAMES["APP"]="App移动端H5"
 
 # 模块端口映射
 declare -A MODULE_PORTS
@@ -97,6 +99,7 @@ MODULE_PORTS["DEVICE"]="48080"           # Gateway端口
 MODULE_PORTS["AI"]="5000"
 MODULE_PORTS["VIDEO"]="6000"
 MODULE_PORTS["WEB"]="8888"
+MODULE_PORTS["APP"]="9010"
 
 # 模块健康检查端点
 declare -A MODULE_HEALTH_ENDPOINTS
@@ -105,6 +108,7 @@ MODULE_HEALTH_ENDPOINTS["DEVICE"]="/actuator/health"  # Gateway健康检查
 MODULE_HEALTH_ENDPOINTS["AI"]="/actuator/health"
 MODULE_HEALTH_ENDPOINTS["VIDEO"]="/actuator/health"
 MODULE_HEALTH_ENDPOINTS["WEB"]="/health"
+MODULE_HEALTH_ENDPOINTS["APP"]="/health"
 
 # 日志输出函数（去掉颜色代码后写入日志文件）
 log_to_file() {
@@ -634,7 +638,7 @@ execute_module_command() {
 
     local defer_agent_sync=0
     case "$module" in
-        DEVICE|AI|VIDEO|WEB) defer_agent_sync=1 ;;
+        DEVICE|AI|VIDEO|WEB|APP) defer_agent_sync=1 ;;
     esac
     if [ "$defer_agent_sync" -eq 1 ]; then
         export EASYAIOT_DEFER_PLATFORM_AGENT_SYNC=1
@@ -744,6 +748,10 @@ install_linux() {
     local total_count=${#MODULES[@]}
     
     for module in "${MODULES[@]}"; do
+        if ! module_enabled_for_deploy_profile "$module"; then
+            print_info "跳过 ${MODULE_NAMES[$module]}（当前部署形态 ${EASYAIOT_DEPLOY_PROFILE} 不包含此模块）"
+            continue
+        fi
         print_section "安装 ${MODULE_NAMES[$module]}"
         if execute_module_command "$module" "install"; then
             success_count=$((success_count + 1))
@@ -807,12 +815,15 @@ wait_for_base_services() {
     fi
 }
 
-# 业务模块清单（MODULES 去掉基础服务），结果写入全局数组 BIZ_MODULES
+# 业务模块清单（MODULES 去掉基础服务，并按部署形态过滤），结果写入全局数组 BIZ_MODULES
 collect_biz_modules() {
+    ensure_deploy_profile
     BIZ_MODULES=()
     local module
     for module in "${MODULES[@]}"; do
-        [ "$module" = ".scripts/docker" ] || BIZ_MODULES+=("$module")
+        [ "$module" = ".scripts/docker" ] && continue
+        module_enabled_for_deploy_profile "$module" || continue
+        BIZ_MODULES+=("$module")
     done
 }
 
@@ -919,6 +930,9 @@ restart_all() {
     create_network
     
     for module in "${MODULES[@]}"; do
+        if ! module_enabled_for_deploy_profile "$module"; then
+            continue
+        fi
         if execute_module_command "$module" "restart"; then
             # 基础服务重启后精确等待就绪，再重启依赖它的业务模块（取代原固定 sleep 5）
             if [ "$module" = ".scripts/docker" ]; then
@@ -985,13 +999,19 @@ build_all() {
 
     if [ "${PARALLEL_BUILD:-false}" = "true" ]; then
         print_info "并行构建模式（PARALLEL_BUILD=true），各模块日志将在结束后汇总展示"
-        if ! run_modules_parallel "build" "${MODULES[@]}"; then
+        local active_modules=()
+        local module
+        for module in "${MODULES[@]}"; do
+            module_enabled_for_deploy_profile "$module" && active_modules+=("$module")
+        done
+        if ! run_modules_parallel "build" "${active_modules[@]}"; then
             print_error "部分模块构建失败，请检查日志: $LOG_FILE"
             exit 1
         fi
     else
         local module
         for module in "${MODULES[@]}"; do
+            module_enabled_for_deploy_profile "$module" || continue
             execute_module_command "$module" "build" || print_warning "${MODULE_NAMES[$module]} 构建失败，继续其余模块"
             echo ""
         done
@@ -1077,6 +1097,7 @@ verify_all() {
     local failed_modules=()
     
     for module in "${MODULES[@]}"; do
+        module_enabled_for_deploy_profile "$module" || continue
         if verify_service_health "$module"; then
             success_count=$((success_count + 1))
         else
@@ -1099,6 +1120,9 @@ verify_all() {
         echo -e "  AI服务:                http://localhost:5000"
         echo -e "  Video服务:             http://localhost:6000"
         echo -e "  Web前端:               http://localhost:8888"
+        if module_enabled_for_deploy_profile APP; then
+            echo -e "  App移动端H5:           http://localhost:9010"
+        fi
         echo ""
         return 0
     else

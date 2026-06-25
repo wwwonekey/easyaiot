@@ -97,6 +97,14 @@ is_mini_deploy_profile() {
     [ "${EASYAIOT_DEPLOY_PROFILE:-full}" = "mini" ]
 }
 
+# 按部署形态判断业务模块是否启用（APP 仅 full 全量形态）
+module_enabled_for_deploy_profile() {
+    case "$1" in
+        APP) [ "${EASYAIOT_DEPLOY_PROFILE:-full}" = "full" ] ;;
+        *) return 0 ;;
+    esac
+}
+
 # mini / standard 形态均不部署 TDengine 中间件
 is_tdengine_disabled_deploy_profile() {
     case "${EASYAIOT_DEPLOY_PROFILE:-full}" in
@@ -216,7 +224,7 @@ print_deploy_profile_summary() {
       echo "  其余模块与中间件全部启动"
       ;;
     full)
-      echo "  启动全部业务模块与中间件（推荐宿主机内存 ≥ 20 GB）"
+      echo "  启动全部业务模块与中间件（含 APP 移动端 H5，推荐宿主机内存 ≥ 20 GB）"
       ;;
   esac
 }
