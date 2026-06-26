@@ -71,6 +71,61 @@ runtime_is_native_arch() {
     [ "$1" = "$(runtime_detect_arch)" ]
 }
 
+# 规范化 build-runtime 目标架构（空/all=全部；无效返回 INVALID）
+runtime_normalize_build_arch() {
+    local raw="${1:-}"
+    raw="${raw,,}"  # bash 4+ 小写
+    case "$raw" in
+        ""|all) echo "" ;;
+        amd64|x86_64) echo "amd64" ;;
+        arm64|aarch64) echo "arm64" ;;
+        arm32|armv7|armv7l) echo "arm32" ;;
+        *) echo "INVALID" ;;
+    esac
+}
+
+# 是否仅构建单一架构（非 all/空）
+runtime_is_single_arch_build() {
+    local a="${EASYAIOT_RUNTIME_BUILD_ARCH:-}"
+    [ -n "$a" ] && [ "$a" != "all" ]
+}
+
+# 解析 build-runtime 目标架构列表 → RUNTIME_RESOLVED_BUILD_ARCHS
+runtime_resolve_build_archs() {
+    local target normalized current a supported=false
+    target="${EASYAIOT_RUNTIME_BUILD_ARCH:-}"
+    RUNTIME_RESOLVED_BUILD_ARCHS=()
+    current=$(runtime_detect_arch)
+
+    if [ -z "$target" ] || [ "$target" = "all" ]; then
+        RUNTIME_RESOLVED_BUILD_ARCHS+=("$current")
+        for a in "${ALL_RUNTIME_ARCHS[@]}"; do
+            [ "$a" = "$current" ] || RUNTIME_RESOLVED_BUILD_ARCHS+=("$a")
+        done
+        return 0
+    fi
+
+    normalized=$(runtime_normalize_build_arch "$target")
+    if [ "$normalized" = "INVALID" ]; then
+        runtime_img_msg error "无效的目标架构: ${target}，可选: all | amd64 | arm64 | arm32"
+        return 1
+    fi
+
+    for a in "${ALL_RUNTIME_ARCHS[@]}"; do
+        if [ "$a" = "$normalized" ]; then
+            supported=true
+            break
+        fi
+    done
+    if ! $supported; then
+        runtime_img_msg error "不支持的目标架构: ${normalized}，当前支持: ${ALL_RUNTIME_ARCHS[*]}"
+        return 1
+    fi
+
+    RUNTIME_RESOLVED_BUILD_ARCHS=("$normalized")
+    return 0
+}
+
 # ============================================================================
 # 远程仓库配置（CNB）
 # ============================================================================
@@ -319,6 +374,62 @@ runtime_interactive_select_profile() {
     echo ""
 }
 
+# build-runtime 交互选择目标架构（默认全部）
+runtime_interactive_select_build_arch() {
+    local normalized current choice idx a
+    if [ -n "${EASYAIOT_RUNTIME_BUILD_ARCH:-}" ]; then
+        normalized=$(runtime_normalize_build_arch "$EASYAIOT_RUNTIME_BUILD_ARCH")
+        if [ "$normalized" = "INVALID" ]; then
+            runtime_img_msg error "无效的目标架构: ${EASYAIOT_RUNTIME_BUILD_ARCH}，可选: all | amd64 | arm64 | arm32"
+            exit 1
+        fi
+        if [ -n "$normalized" ]; then
+            export EASYAIOT_RUNTIME_BUILD_ARCH="$normalized"
+            runtime_img_msg info "已选择: 仅 ${EASYAIOT_RUNTIME_BUILD_ARCH} 架构"
+        else
+            unset EASYAIOT_RUNTIME_BUILD_ARCH
+        fi
+        return 0
+    fi
+    if [ ! -t 0 ]; then
+        return 0
+    fi
+
+    current=$(runtime_detect_arch)
+    echo ""
+    echo "请选择要构建的目标架构："
+    echo "  1) 全部     — 本机 + 所有支持架构（默认）"
+    idx=2
+    declare -A _ARCH_CHOICES=()
+    for a in "${ALL_RUNTIME_ARCHS[@]}"; do
+        if [ "$a" = "$current" ]; then
+            echo "  ${idx}) ${a}     — 仅本机架构"
+        else
+            echo "  ${idx}) ${a}     — 仅该架构（跨架构构建）"
+        fi
+        _ARCH_CHOICES[$idx]="$a"
+        idx=$((idx + 1))
+    done
+    echo ""
+    read -r -p "请输入选项 [1-$((idx - 1))，默认 1]: " choice
+    case "${choice:-1}" in
+        1)
+            unset EASYAIOT_RUNTIME_BUILD_ARCH
+            runtime_img_msg info "已选择: 全部架构 (${ALL_RUNTIME_ARCHS[*]})"
+            ;;
+        *)
+            if [ -n "${_ARCH_CHOICES[$choice]:-}" ]; then
+                export EASYAIOT_RUNTIME_BUILD_ARCH="${_ARCH_CHOICES[$choice]}"
+                runtime_img_msg info "已选择: 仅 ${EASYAIOT_RUNTIME_BUILD_ARCH} 架构"
+            else
+                runtime_img_msg warning "无效选项，使用默认: 全部架构"
+                unset EASYAIOT_RUNTIME_BUILD_ARCH
+            fi
+            ;;
+    esac
+    echo ""
+}
+
 runtime_interactive_select_tag() {
     if [ -n "${EASYAIOT_RUNTIME_TAG:-}" ]; then
         return 0
@@ -358,20 +469,18 @@ runtime_interactive_confirm_force_rebuild() {
         return 0
     fi
     if [ ! -t 0 ]; then
-        export EASYAIOT_RUNTIME_FORCE_REBUILD="${EASYAIOT_RUNTIME_FORCE_REBUILD:-1}"
+        export EASYAIOT_RUNTIME_FORCE_REBUILD="${EASYAIOT_RUNTIME_FORCE_REBUILD:-0}"
         return 0
     fi
     echo ""
     local fr=""
-    read -r -p "强制重新构建（忽略本地镜像缓存）？(Y/n) " fr
-    case "${fr:-Y}" in
-        n|N|no|NO) export EASYAIOT_RUNTIME_FORCE_REBUILD=0 ;;
-        *) export EASYAIOT_RUNTIME_FORCE_REBUILD=1 ;;
+    read -r -p "强制重新构建全部镜像（忽略本地缓存）？(y/N) " fr
+    case "${fr:-N}" in
+        y|Y|yes|YES) export EASYAIOT_RUNTIME_FORCE_REBUILD=1 ;;
+        *) export EASYAIOT_RUNTIME_FORCE_REBUILD=0 ;;
     esac
     if [ "${EASYAIOT_RUNTIME_FORCE_REBUILD}" = "1" ]; then
         runtime_img_msg info "已选择: 强制重新构建（忽略本地镜像缓存）"
-    else
-        runtime_img_msg info "已选择: 复用本地镜像（已存在则跳过构建，直接推送）"
     fi
 }
 
@@ -393,6 +502,7 @@ runtime_images_prepare_build_interactive() {
     export REGISTRY="$RUNTIME_IMAGE_REGISTRY"
     runtime_verify_registry_push_access "$RUNTIME_IMAGE_REGISTRY" || exit 1
     runtime_interactive_select_profile build
+    runtime_interactive_select_build_arch
     runtime_interactive_select_tag
     runtime_interactive_confirm_push
     runtime_interactive_confirm_force_rebuild
@@ -410,7 +520,7 @@ runtime_images_export_for_invoke() {
     if [ "${EASYAIOT_RUNTIME_PUSH:-0}" = "1" ] || [ "${EASYAIOT_RUNTIME_PUSH:-}" = "true" ]; then
         export EASYAIOT_RUNTIME_PUSH=1
     fi
-    if [ "${EASYAIOT_RUNTIME_FORCE_REBUILD:-1}" = "1" ]; then
+    if [ "${EASYAIOT_RUNTIME_FORCE_REBUILD:-0}" = "1" ]; then
         export EASYAIOT_RUNTIME_FORCE_REBUILD=1
         export FORCE_REBUILD=true
     else
@@ -422,6 +532,18 @@ runtime_images_export_for_invoke() {
     fi
     if [ "${EASYAIOT_RUNTIME_BUILD_ALL_PROFILES:-0}" = "1" ]; then
         unset EASYAIOT_RUNTIME_EXPLICIT_PROFILE
+    fi
+    if [ -n "${EASYAIOT_RUNTIME_BUILD_ARCH:-}" ]; then
+        local _ba; _ba=$(runtime_normalize_build_arch "$EASYAIOT_RUNTIME_BUILD_ARCH")
+        if [ "$_ba" = "INVALID" ]; then
+            runtime_img_msg error "无效的目标架构: ${EASYAIOT_RUNTIME_BUILD_ARCH}"
+            exit 1
+        fi
+        if [ -n "$_ba" ]; then
+            export EASYAIOT_RUNTIME_BUILD_ARCH="$_ba"
+        else
+            unset EASYAIOT_RUNTIME_BUILD_ARCH
+        fi
     fi
 }
 
@@ -680,6 +802,55 @@ runtime_images_should_skip_build() {
     return 1
 }
 
+# ============================================================================
+# 跨架构构建：QEMU / binfmt 检测与安装
+# x86 宿主机上 docker build --platform linux/arm64 执行 RUN 步骤需要 QEMU 用户态模拟
+# ============================================================================
+runtime_binfmt_handler_for_platform() {
+    case "$1" in
+        linux/arm64|linux/arm64/v8) echo "qemu-aarch64" ;;
+        linux/arm/v7|linux/arm/v6)  echo "qemu-arm" ;;
+        *)                          echo "" ;;
+    esac
+}
+
+runtime_binfmt_supports_platform() {
+    local handler
+    handler=$(runtime_binfmt_handler_for_platform "$1")
+    [ -z "$handler" ] && return 0
+    [ -f "/proc/sys/fs/binfmt_misc/${handler}" ]
+}
+
+# 确保宿主机可执行目标平台的容器内指令（交叉构建前置条件）
+runtime_ensure_qemu_binfmt() {
+    local platform="${1:-linux/arm64}"
+    local handler
+    handler=$(runtime_binfmt_handler_for_platform "$platform")
+    [ -z "$handler" ] && return 0
+
+    if runtime_binfmt_supports_platform "$platform"; then
+        return 0
+    fi
+
+    runtime_img_msg info "未检测到 ${platform} 的 QEMU/binfmt 支持，正在安装（首次约需 1 分钟）..."
+    if ! command -v docker >/dev/null 2>&1; then
+        runtime_img_msg error "Docker 未安装，无法配置 QEMU/binfmt"
+        return 1
+    fi
+    if ! docker run --rm --privileged tonistiigi/binfmt --install all; then
+        runtime_img_msg error "QEMU/binfmt 安装失败，无法在 x86 宿主机上交叉构建 ${platform} 镜像"
+        runtime_img_msg info "可选方案: 在 ARM 机器上构建 arm64 镜像，或手动执行:"
+        runtime_img_msg info "  docker run --rm --privileged tonistiigi/binfmt --install all"
+        return 1
+    fi
+    if ! runtime_binfmt_supports_platform "$platform"; then
+        runtime_img_msg error "QEMU/binfmt 安装后仍无法执行 ${platform} 容器（缺少 ${handler}）"
+        return 1
+    fi
+    runtime_img_msg ok "QEMU/binfmt 已就绪，可交叉构建 ${platform}"
+    return 0
+}
+
 # 委托 runtime_image.sh（参数原样透传，如 --profile mini --tag v1.0）
 runtime_images_invoke() {
     if [ ! -f "$RUNTIME_IMAGE_SCRIPT" ]; then
@@ -710,7 +881,8 @@ runtime_images_usage() {
   EASYAIOT_RUNTIME_TAG         镜像标签（默认 latest）
   EASYAIOT_RUNTIME_PUSH=1      构建后推送（仅 build-runtime）
   EASYAIOT_RUNTIME_BUILD_ALL_PROFILES=1  构建全部形态（仅 build-runtime）
-  EASYAIOT_RUNTIME_FORCE_REBUILD=1       强制重建（交互式 build-runtime 默认开启）
+  EASYAIOT_RUNTIME_BUILD_ARCH=all|amd64|arm64  目标架构（默认 all=全部；单架构时跳过 manifest）
+  EASYAIOT_RUNTIME_FORCE_REBUILD=1       强制重建全部镜像（忽略本地缓存）
   EASYAIOT_RUNTIME_FORCE_REBUILD=0       复用本地镜像（已存在则跳过构建，直接推送）
   EASYAIOT_SKIP_REGISTRY_AUTH_CHECK=1     跳过 build-runtime 前的 CNB 登录/推送权限检查
   EASYAIOT_DOCKER_PUSH_RETRIES=5          推送失败时的最大重试次数（默认 5，网络抖动时自动退避重试）

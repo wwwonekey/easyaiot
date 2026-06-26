@@ -855,10 +855,15 @@ view_logs() {
 
 # 构建镜像
 build_image() {
-    print_info "重新构建 Docker 镜像..."
     check_docker
     check_docker_compose
-    
+
+    if [ "${FORCE_REBUILD:-0}" != "1" ] && docker image inspect web-service:latest >/dev/null 2>&1; then
+        print_success "web-service:latest 已存在，跳过 Docker 构建（强制重建请设置 FORCE_REBUILD=1）"
+        return 0
+    fi
+
+    print_info "重新构建 Docker 镜像..."
     # 注意：前端构建现在在Docker容器内完成，构建镜像时会自动完成
     print_info "前端构建将在Docker容器内自动完成"
     

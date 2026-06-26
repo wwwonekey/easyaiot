@@ -583,11 +583,18 @@ view_logs() {
 
 # 构建镜像
 build_image() {
-    print_info "重新构建 Docker 镜像..."
     check_docker
     check_docker_compose
-    
-    if ! build_with_cache "--no-cache"; then
+
+    if [ "${FORCE_REBUILD:-0}" != "1" ] && docker image inspect video-service:latest >/dev/null 2>&1; then
+        print_success "video-service:latest 已存在，跳过 Docker 构建（强制重建请设置 FORCE_REBUILD=1）"
+        return 0
+    fi
+
+    print_info "重新构建 Docker 镜像..."
+    local cache_flag=""
+    [ "${FORCE_REBUILD:-0}" = "1" ] && cache_flag="--no-cache"
+    if ! build_with_cache "$cache_flag"; then
         exit 1
     fi
     print_success "镜像构建完成"

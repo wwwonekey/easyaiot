@@ -7,8 +7,8 @@
 #      （Maven、Vite、pip install 等耗时操作），产出 JAR / dist 等编译产物。
 #   2. 针对不同目标架构（amd64 arm64），循环执行 docker build --platform，
 #      仅 COPY 本机编译产物 + 拉取目标架构的 base image 完成镜像包装。
-#      ★ 不依赖 QEMU 模拟：纯 Java (JAR)、纯前端 (Vite dist)、纯 Python
-#        脚本可跨架构 COPY 运行；C/C++ 原生库需宿主机交叉编译工具链支持。
+#      ★ 跨架构构建若 Dockerfile 含 RUN 步骤，宿主机需 QEMU/binfmt（脚本会自动安装）。
+#      纯 Java JAR、纯前端 dist 等仅 COPY 的层不依赖 QEMU；含 yum/apt/pnpm 等 RUN 的层需要。
 #   3. 打标签并推送到远程仓库。
 #
 # 推荐入口（交互式，无需参数，默认 full）:
@@ -18,7 +18,7 @@
 # 远程仓库配置见 runtime_registry.conf（或 EASYAIOT_RUNTIME_REGISTRY 环境变量）
 #
 # 直接调用本脚本（支持命令行参数，适合 CI）:
-#   bash .scripts/docker/runtime_image.sh build [--push] [--tag <tag>] [--profile <profile>] [--registry <url>] [--native-source] [--force-rebuild]
+#   bash .scripts/docker/runtime_image.sh build [--push] [--tag <tag>] [--profile <profile>] [--registry <url>] [--arch <arch>] [--native-source] [--force-rebuild]
 #   bash .scripts/docker/runtime_image.sh pull [--tag <tag>] [--profile <profile>] [--registry <url>]
 #
 # 选项:
@@ -29,6 +29,8 @@
 #   --profile <name> 指定部署形态：mini | standard | full
 #                    - build: 不指定则构建全部 3 种形态；指定则只构建该形态
 #                    - pull:  不指定则交互选择（默认 full）；指定则直接拉取该形态
+#   --arch <arch>    指定构建架构：all | amd64 | arm64（默认 all=全部架构）
+#                    单架构模式仅构建/推送该架构镜像，跳过多架构 manifest 更新
 #   --native-source  使用原始源（非国内镜像源），默认使用腾讯云镜像源加速
 #
 # 架构自动检测（uname -m）:
@@ -66,6 +68,7 @@
 #   bash .scripts/docker/runtime_image.sh build --push
 #   bash .scripts/docker/runtime_image.sh build --profile standard
 #   bash .scripts/docker/runtime_image.sh build --push --profile mini --registry my-registry.com/easyaiot/
+#   bash .scripts/docker/runtime_image.sh build --push --arch arm64
 #   bash .scripts/docker/runtime_image.sh pull
 #   bash .scripts/docker/runtime_image.sh pull --profile mini --registry my-registry.com/easyaiot/
 #   bash .scripts/docker/runtime_image.sh pull --tag v1.2.0 --profile full
@@ -123,6 +126,10 @@ REGISTRY=""
 COMMAND=""
 NATIVE_SOURCE="${NATIVE_SOURCE:-false}"
 FORCE_REBUILD=false
+_BUILD_ARCH=""
+
+# 内部布尔开关；子进程通过 subshell 导出数值型 FORCE_REBUILD=0|1，避免污染本变量
+is_force_rebuild() { [ "$FORCE_REBUILD" = true ]; }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -132,6 +139,8 @@ while [[ $# -gt 0 ]]; do
             DO_PUSH=true; shift ;;
         --tag)
             TAG="$2"; shift 2 ;;
+        --arch)
+            _BUILD_ARCH="$2"; shift 2 ;;
         --native-source)
             NATIVE_SOURCE=true; shift ;;
         --force-rebuild)
@@ -186,6 +195,21 @@ if [ -n "${EASYAIOT_RUNTIME_EXPLICIT_PROFILE:-}" ] && [ -z "${_EXPLICIT_PROFILE:
 fi
 if [ "${EASYAIOT_RUNTIME_BUILD_ALL_PROFILES:-0}" = "1" ]; then
     unset _EXPLICIT_PROFILE
+fi
+if [ -n "$_BUILD_ARCH" ]; then
+    export EASYAIOT_RUNTIME_BUILD_ARCH="$_BUILD_ARCH"
+fi
+if [ -n "${EASYAIOT_RUNTIME_BUILD_ARCH:-}" ]; then
+    _ba_norm=$(runtime_normalize_build_arch "$EASYAIOT_RUNTIME_BUILD_ARCH")
+    if [ "$_ba_norm" = "INVALID" ]; then
+        print_error "无效的目标架构: ${EASYAIOT_RUNTIME_BUILD_ARCH}，可选: all | amd64 | arm64"
+        exit 1
+    fi
+    if [ -n "$_ba_norm" ]; then
+        export EASYAIOT_RUNTIME_BUILD_ARCH="$_ba_norm"
+    else
+        unset EASYAIOT_RUNTIME_BUILD_ARCH
+    fi
 fi
 
 if [ -n "${_EXPLICIT_PROFILE:-}" ]; then
@@ -269,8 +293,8 @@ _profile_label() { runtime_profile_label "$@"; }
 #      （Maven、Vite、pip install 等），产出 JAR / dist 等产物。
 #   2. 针对目标架构，docker build --platform <target> 仅拉取目标架构的
 #      base image，然后 COPY 本机编译产物完成镜像包装。
-#   3. 不再依赖 QEMU 模拟 —— 纯 Java JAR、纯前端 dist、纯 Python 脚本
-#      可跨架构运行；C/C++ 原生库需宿主机交叉编译工具链。
+#   3. 跨架构 docker build --platform 拉取目标架构 base image 并 COPY 产物；
+#      若 Dockerfile 含 RUN 步骤，x86 宿主机需 QEMU/binfmt（runtime_ensure_qemu_binfmt）。
 # ============================================================================
 
 # 执行宿主机原生架构的完整编译（install_linux.sh build）
@@ -290,6 +314,13 @@ ensure_native_build() {
     local rc=0
     (
         cd "$PROJECT_ROOT"
+        # 传递 FORCE_REBUILD，使各模块 install 脚本在复用模式下跳过已有镜像
+        if is_force_rebuild; then
+            export FORCE_REBUILD=1
+        else
+            export FORCE_REBUILD=0
+        fi
+        export EASYAIOT_RUNTIME_BUILD=1
         bash "$install_script" build 2>&1 | tee "${LOG_DIR}/native_build_${CURRENT_ARCH}.log"
     ) || rc=$?
     if [ $rc -ne 0 ]; then
@@ -530,7 +561,7 @@ build_module_with_install_script() {
     native_ref=$(local_ref "$local_name")
 
     # --force-rebuild：强制重建，跳过"已存在"检查；否则检查目标 local_ref 是否已就绪
-    if ! $FORCE_REBUILD; then
+    if ! is_force_rebuild; then
         if docker image inspect "$local_ref" >/dev/null 2>&1; then
             local existing; existing=$(image_actual_arch "$local_ref")
             if [ "$existing" = "$target_arch" ]; then
@@ -541,6 +572,29 @@ build_module_with_install_script() {
         fi
     else
         print_info "强制重建模式：忽略已存在的镜像缓存"
+    fi
+
+    # ★ 清除架构不匹配的镜像（本机/跨架构通用）
+    # 各模块 install_linux.sh 的增量检测只按「镜像是否存在」跳过构建，不校验架构。
+    # 若本地残留其他架构镜像（如 amd64），install 脚本会直接跳过，导致推送时架构校验失败。
+    if ! is_force_rebuild; then
+        local need_clean=false ref existing
+        local -a refs_to_check=("$local_ref")
+        [ "$native_ref" != "$local_ref" ] && refs_to_check+=("$native_ref")
+        for ref in "${refs_to_check[@]}"; do
+            if docker image inspect "$ref" >/dev/null 2>&1; then
+                existing=$(image_actual_arch "$ref")
+                if [ -n "$existing" ] && [ "$existing" != "$target_arch" ]; then
+                    print_info "镜像架构不匹配: ${ref} (现有=${existing}, 期望=${target_arch})，将清理并重建"
+                    need_clean=true
+                fi
+            fi
+        done
+        if $need_clean; then
+            for ref in "${refs_to_check[@]}"; do
+                docker rmi "$ref" 2>/dev/null || true
+            done
+        fi
     fi
 
     # 选择 install 脚本
@@ -566,19 +620,23 @@ build_module_with_install_script() {
     local build_log="${LOG_DIR}/build_${local_name}_${target_arch}_$(date +%Y%m%d_%H%M%S).log"
     local rc=0
 
-    # ★ 跨架构平台导出策略：
-    #   - 架构专属脚本（install_linux_arm.sh）自带 DOCKER_PLATFORM 和基础镜像，不导出避免覆盖；
-    #     但需设置 EASYAIOT_CROSS_BUILD=1 告诉脚本允许在 x86 宿主机上交叉构建 arm64 镜像。
-    #   - 通用脚本（install_linux.sh）跨架构时需导出 DOCKER_PLATFORM 供 --platform 使用
-    if ! is_native_arch "$target_arch"; then
-        if [ "$install_script" = "install_linux.sh" ]; then
-            export DOCKER_PLATFORM="$(arch_to_platform "$target_arch")"
-        else
-            export EASYAIOT_CROSS_BUILD=1
+    # subshell 内导出子进程环境，避免 FORCE_REBUILD=0|1 污染本脚本的布尔变量
+    (
+        if is_force_rebuild; then export FORCE_REBUILD=1; else export FORCE_REBUILD=0; fi
+        # ★ 跨架构平台导出策略：
+        #   - 架构专属脚本（install_linux_arm.sh）自带 DOCKER_PLATFORM 和基础镜像，不导出避免覆盖；
+        #     但需设置 EASYAIOT_CROSS_BUILD=1 告诉脚本允许在 x86 宿主机上交叉构建 arm64 镜像。
+        #   - 通用脚本（install_linux.sh）跨架构时需导出 DOCKER_PLATFORM 供 --platform 使用
+        if ! is_native_arch "$target_arch"; then
+            if [ "$install_script" = "install_linux.sh" ]; then
+                export DOCKER_PLATFORM="$(arch_to_platform "$target_arch")"
+            else
+                export EASYAIOT_CROSS_BUILD=1
+            fi
         fi
-    fi
-
-    ( cd "$module_path"; bash "$install_script" build 2>&1 | tee "$build_log" ) || rc=$?
+        cd "$module_path"
+        bash "$install_script" build 2>&1 | tee "$build_log"
+    ) || rc=$?
 
     if [ $rc -ne 0 ]; then
         print_error "构建失败 (exit=${rc})，日志: ${build_log}"
@@ -638,35 +696,57 @@ local_image_ready() {
     [ "$actual" = "$target_arch" ]
 }
 
-# 检查构建计划中所有本地镜像是否已就绪（依赖外层 build_profiles / build_archs）
-all_build_plan_images_ready() {
-    local target_arch profile mapping tmp rname lname
+# 检查构建计划中指定架构的本地镜像是否已全部就绪（依赖外层 build_profiles）
+all_build_plan_images_ready_for_arch() {
+    local target_arch="$1" profile mapping tmp rname lname
 
-    for target_arch in "${build_archs[@]}"; do
-        for mapping in "${INDEPENDENT_MODULES[@]}"; do
-            rname="${mapping%%|*}"; tmp="${mapping#*|}"; lname="${tmp%%|*}"
-            is_profile_dependent "$rname" && continue
-            local_image_ready "$lname" "" "$target_arch" || return 1
-        done
+    for mapping in "${INDEPENDENT_MODULES[@]}"; do
+        rname="${mapping%%|*}"; tmp="${mapping#*|}"; lname="${tmp%%|*}"
+        is_profile_dependent "$rname" && continue
+        local_image_ready "$lname" "" "$target_arch" || return 1
+    done
 
-        for profile in "${build_profiles[@]}"; do
-            if [ "$profile" = "full" ]; then
-                for mapping in "${FULL_ONLY_MODULES[@]}"; do
-                    tmp="${mapping#*|}"; lname="${tmp%%|*}"
-                    local_image_ready "$lname" "" "$target_arch" || return 1
-                done
-            fi
-        done
+    for profile in "${build_profiles[@]}"; do
+        if [ "$profile" = "full" ]; then
+            for mapping in "${FULL_ONLY_MODULES[@]}"; do
+                tmp="${mapping#*|}"; lname="${tmp%%|*}"
+                local_image_ready "$lname" "" "$target_arch" || return 1
+            done
+        fi
+    done
 
-        for lname in "${DEVICE_LOCAL_NAMES[@]}"; do
-            local_image_ready "$lname" "" "$target_arch" || return 1
-        done
+    for lname in "${DEVICE_LOCAL_NAMES[@]}"; do
+        local_image_ready "$lname" "" "$target_arch" || return 1
+    done
 
-        for profile in "${build_profiles[@]}"; do
-            local_image_ready "web-service" "$profile" "$target_arch" || return 1
-        done
+    for profile in "${build_profiles[@]}"; do
+        local_image_ready "web-service" "$profile" "$target_arch" || return 1
     done
     return 0
+}
+
+# 检查构建计划中所有架构的本地镜像是否已就绪（依赖外层 build_profiles / build_archs）
+all_build_plan_images_ready() {
+    local target_arch
+    for target_arch in "${build_archs[@]}"; do
+        all_build_plan_images_ready_for_arch "$target_arch" || return 1
+    done
+    return 0
+}
+
+# 打印各架构构建计划摘要
+print_build_plan_summary() {
+    local target_arch
+    print_info "构建计划："
+    for target_arch in "${build_archs[@]}"; do
+        if is_force_rebuild; then
+            print_info "  ${target_arch}: 强制重建后推送"
+        elif all_build_plan_images_ready_for_arch "$target_arch"; then
+            print_info "  ${target_arch}: 本地镜像已就绪，仅推送"
+        else
+            print_info "  ${target_arch}: 部分镜像缺失，构建后推送"
+        fi
+    done
 }
 
 # 构建 DEVICE 模块的所有镜像
@@ -680,7 +760,7 @@ build_device_all() {
     [ -f "$install_script" ] || { print_error "DEVICE 安装脚本不存在: ${install_script}"; return 1; }
     grep -q $'\r' "$install_script" 2>/dev/null && sed -i 's/\r$//' "$install_script" 2>/dev/null || true
 
-    if ! $FORCE_REBUILD; then
+    if ! is_force_rebuild; then
         local all_device_ready=true
         for lname in "${DEVICE_LOCAL_NAMES[@]}"; do
             local_image_ready "$lname" "" "$target_arch" || { all_device_ready=false; break; }
@@ -720,12 +800,14 @@ build_device_all() {
         done
     fi
 
-    # 跨架构：显式导出目标平台
-    if ! is_native_arch "$target_arch"; then
-        export DOCKER_PLATFORM="$(arch_to_platform "$target_arch")"
-    fi
-
-    ( cd "$device_path"; bash "$install_script" build 2>&1 | tee "$build_log" ) || rc=$?
+    (
+        if is_force_rebuild; then export FORCE_REBUILD=1; else export FORCE_REBUILD=0; fi
+        if ! is_native_arch "$target_arch"; then
+            export DOCKER_PLATFORM="$(arch_to_platform "$target_arch")"
+        fi
+        cd "$device_path"
+        bash "$install_script" build 2>&1 | tee "$build_log"
+    ) || rc=$?
 
     # 跨架构：重打 DEVICE 镜像标签并清理 native 标签
     if ! is_native_arch "$target_arch"; then
@@ -786,10 +868,18 @@ _build_push_track() {
     rref=$(remote_ref "$rname" "$profile" "$target_arch")
     mref=$(manifest_ref "$rname" "$profile")
     if [ -n "$profile" ]; then
-        step_label="构建: ${rname} (${profile}, ${target_arch}) → ${lref}"
+        if ! is_force_rebuild && local_image_ready "$lname" "$profile" "$target_arch"; then
+            step_label="推送: ${rname} (${profile}, ${target_arch})"
+        else
+            step_label="构建并推送: ${rname} (${profile}, ${target_arch})"
+        fi
         fail_label="构建/推送失败: ${rname} (${profile}, ${target_arch})"
     else
-        step_label="构建: ${rname} [${target_arch}] → ${lref}"
+        if ! is_force_rebuild && local_image_ready "$lname" "" "$target_arch"; then
+            step_label="推送: ${rname} [${target_arch}]"
+        else
+            step_label="构建并推送: ${rname} [${target_arch}]"
+        fi
         fail_label="构建/推送失败: ${rname} [${target_arch}]"
     fi
     print_step "$step_label"
@@ -804,6 +894,69 @@ _build_push_track() {
     return 1
 }
 
+# 统计当前构建计划下单架构应构建的镜像数量（用于跨架构前置失败时汇总）
+count_planned_images_for_arch() {
+    local -a profiles=("$@")
+    local count=0 mapping rname
+    for mapping in "${INDEPENDENT_MODULES[@]}"; do
+        rname="${mapping%%|*}"
+        is_profile_dependent "$rname" || count=$((count + 1))
+    done
+    local _bp
+    for _bp in "${profiles[@]}"; do
+        if [ "$_bp" = "full" ]; then
+            count=$((count + 1))
+            break
+        fi
+    done
+    count=$((count + ${#DEVICE_REMOTE_NAMES[@]} + ${#profiles[@]}))
+    echo "$count"
+}
+
+# 从本机 WEB 镜像提取 dist，供仅跨架构构建时复用
+extract_web_dist_from_native_images() {
+    local -a profiles=("$@")
+    local profile img_ref dst cid
+    print_info "从本机 WEB 镜像提取 dist 供跨架构复用 ..."
+    for profile in "${profiles[@]}"; do
+        dst="${PROJECT_ROOT}/WEB/dist-prebuilt-${profile}"
+        if [ -d "$dst" ]; then
+            print_info "  dist 已存在: ${dst}/"
+            continue
+        fi
+        img_ref=$(local_ref "web-service" "$profile")
+        if docker image inspect "$img_ref" >/dev/null 2>&1; then
+            print_info "  → ${img_ref} → ${dst}/"
+            rm -rf "$dst" 2>/dev/null || true
+            cid=$(docker create "$img_ref" 2>/dev/null)
+            if [ -n "$cid" ]; then
+                docker cp "${cid}:/usr/share/nginx/html/." "$dst/" 2>/dev/null || \
+                    print_warning "提取 dist 失败（非致命），跨架构 WEB 将回退到完整 vite build"
+                docker rm "$cid" >/dev/null 2>&1
+            fi
+        else
+            print_warning "本机 WEB 镜像不存在: ${img_ref}，跨架构 WEB 将回退到完整 vite build"
+        fi
+    done
+}
+
+# 单架构跨架构构建时，本机架构不在 build_archs 中，需提前提取 WEB dist
+ensure_web_dist_for_cross_arch_build() {
+    local -n archs=$1
+    local -n profiles=$2
+    local target_arch has_cross=false has_native=false
+    for target_arch in "${archs[@]}"; do
+        if is_native_arch "$target_arch"; then
+            has_native=true
+        else
+            has_cross=true
+        fi
+    done
+    if $has_cross && ! $has_native; then
+        extract_web_dist_from_native_images "${profiles[@]}"
+    fi
+}
+
 build_all_modules() {
     local -a build_profiles=()
     if [ -n "${_EXPLICIT_PROFILE:-}" ]; then
@@ -813,10 +966,10 @@ build_all_modules() {
     fi
 
     local -a build_archs=()
-    build_archs+=("$CURRENT_ARCH")
-    for a in "${ALL_ARCHS[@]}"; do
-        is_native_arch "$a" || build_archs+=("$a")
-    done
+    if ! runtime_resolve_build_archs; then
+        exit 1
+    fi
+    build_archs=("${RUNTIME_RESOLVED_BUILD_ARCHS[@]}")
 
     local total_archs=${#build_archs[@]}
     local total_profiles=${#build_profiles[@]}
@@ -824,6 +977,11 @@ build_all_modules() {
     print_header "运行时镜像构建与推送"
     runtime_log_registry_info
     echo "  当前架构: ${CURRENT_ARCH}"; printf '  构建架构: %s\n' "${build_archs[*]}"
+    if runtime_is_single_arch_build; then
+        echo "  架构模式: 单架构（跳过多架构 manifest 更新）"
+    else
+        echo "  架构模式: 全部架构"
+    fi
     echo "  Registry: ${REGISTRY}"; echo "  Tag: ${TAG}"
     echo "  Push: ${DO_PUSH}"; echo "  强制重建: ${FORCE_REBUILD}"
     printf '  构建形态: %s\n' "${build_profiles[*]}"
@@ -839,16 +997,26 @@ build_all_modules() {
 
     # ========================================================================
     # 阶段 0：宿主机本机编译（install_linux.sh build）
-    # 非强制重建且全部本地镜像已就绪时，跳过耗时的本机编译
+    #   - 全部架构镜像已就绪 → 跳过
+    #   - 仅跨架构缺失、本机架构已就绪 → 跳过
+    #   - 本机架构有缺失或强制重建 → 执行本机编译
     # ========================================================================
-    if ! $FORCE_REBUILD && all_build_plan_images_ready; then
-        print_info "所有计划的本地运行时镜像已就绪，跳过本机编译（install_linux.sh build）"
+    print_build_plan_summary
+    echo ""
+
+    if ! is_force_rebuild && all_build_plan_images_ready; then
+        print_info "所有架构的运行时镜像均已就绪，跳过本机编译"
+        _NATIVE_BUILT=1
+    elif ! is_force_rebuild && all_build_plan_images_ready_for_arch "$CURRENT_ARCH"; then
+        print_info "本机架构 (${CURRENT_ARCH}) 镜像已就绪，跳过本机编译"
         _NATIVE_BUILT=1
     elif ! ensure_native_build; then
         print_error "本机编译失败，无法继续构建镜像"
         exit 1
     fi
     echo ""
+
+    ensure_web_dist_for_cross_arch_build build_archs build_profiles
 
     local success_all=0 failed_all=0
     declare -A _MANIFEST_ARCH_REFS
@@ -867,16 +1035,22 @@ build_all_modules() {
     # 跨架构：docker build --platform <target> 拉取目标架构 base image + COPY 产物
     # ========================================================================
     for target_arch in "${build_archs[@]}"; do
-        local arch_label; is_native_arch "$target_arch" && arch_label="本机原生" || arch_label="跨架构 (无 QEMU)"
-        print_header "${target_arch} (${arch_label}) 构建"
+        local arch_label; is_native_arch "$target_arch" && arch_label="本机原生" || arch_label="跨架构 (QEMU)"
+        print_header "${target_arch} (${arch_label})"
         echo ""
 
         # ★ 每次循环重置 DOCKER_PLATFORM，避免上一轮跨架构值泄漏到本机架构构建
         unset DOCKER_PLATFORM
-        # 跨架构：检查磁盘空间并导出目标平台（供 DEVICE/WEB 等无 arm 脚本的模块使用 --platform）
+        # 跨架构：检查磁盘空间、配置 QEMU/binfmt、导出目标平台
         if ! is_native_arch "$target_arch"; then
+            local cross_platform; cross_platform="$(arch_to_platform "$target_arch")"
+            if ! runtime_ensure_qemu_binfmt "$cross_platform"; then
+                print_error "跨架构构建前置检查失败 (${target_arch})，跳过本架构"
+                failed_all=$((failed_all + $(count_planned_images_for_arch "${build_profiles[@]}")))
+                continue
+            fi
             ensure_docker_disk_space "$target_arch"
-            export DOCKER_PLATFORM="$(arch_to_platform "$target_arch")"
+            export DOCKER_PLATFORM="$cross_platform"
 
             # ★ 跨架构构建前预拉取 ARM 基础镜像（避免 install 脚本中 --pull=false 导致失败）
             # pytorch/manylinuxaarch64-builder 约 10GB+，需预留足够时间和磁盘空间
@@ -998,7 +1172,9 @@ build_all_modules() {
     sync_deploy_profile_to_modules
 
     # ---- 创建多架构 Manifest ----
-    if [ ${#_MANIFEST_ARCH_REFS[@]} -gt 0 ]; then
+    if runtime_is_single_arch_build; then
+        print_info "单架构构建模式：跳过多架构 manifest 创建（避免覆盖已有 manifest；需全架构构建时再更新 :${TAG} 标签）"
+    elif [ ${#_MANIFEST_ARCH_REFS[@]} -gt 0 ]; then
         print_header "创建多架构 Manifest 列表"
         echo ""
         local manifest_ok=0 manifest_fail=0
