@@ -38,6 +38,9 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # shellcheck source=deploy_profile.sh
 source "${SCRIPT_DIR}/deploy_profile.sh"
 
+# shellcheck source=runtime_image_common.sh
+source "${SCRIPT_DIR}/runtime_image_common.sh"
+
 # shellcheck source=node/ensure_platform_agent_invoke.sh
 source "${PROJECT_ROOT}/.scripts/node/ensure_platform_agent_invoke.sh"
 
@@ -487,37 +490,9 @@ is_no() {
     esac
 }
 
-# 镜像获取方式：默认从远程拉取预构建镜像；回车即 Y（与 install_linux.sh 一致，仅 install 时询问一次）
-prompt_and_acquire_runtime_images() {
-    local _do_local_build=0
-    if [ -t 0 ]; then
-        print_info "========================================"
-        print_info "  镜像获取方式"
-        print_info "========================================"
-        print_info "  1) 拉取预构建镜像：从远程仓库下载（快速，默认）"
-        print_info "  2) 本地构建：编译并制作 Docker 镜像（耗时较长）"
-        echo ""
-        read -r -p "是否从远程仓库下载预构建的镜像？(Y/n) " _pull_response
-        case "${_pull_response:-Y}" in
-            n|N|no|NO) _do_local_build=1 ;;
-            *) _do_local_build=0 ;;
-        esac
-    else
-        print_info "非交互模式，默认拉取预构建镜像"
-    fi
-
-    if [ "$_do_local_build" -eq 0 ]; then
-        print_info "正在拉取预构建镜像..."
-        if bash "${SCRIPT_DIR}/runtime_image.sh" pull; then
-            print_success "预构建镜像拉取成功"
-            export EASYAIOT_SKIP_BUILD=1
-        else
-            print_warning "预构建镜像拉取失败，将尝试本地构建"
-            _do_local_build=1
-        fi
-    fi
-
-    export EASYAIOT_SKIP_IMAGE_PROMPT=1
+# 镜像获取（install 时由 runtime_image_common 统一处理）
+init_runtime_images_for_install() {
+    runtime_images_acquire
 }
 
 init_deploy_profile_for_command() {
@@ -525,10 +500,10 @@ init_deploy_profile_for_command() {
     case "$cmd" in
         install)
             select_deploy_profile_for_install
-            prompt_and_acquire_runtime_images
+            init_runtime_images_for_install
             print_info "部署形态: $(_deploy_profile_desc) (EASYAIOT_DEPLOY_PROFILE=${EASYAIOT_DEPLOY_PROFILE})"
             ;;
-        start|restart|update|verify|status|build|build-base)
+        start|restart|update|verify|status|build|build-base|pull|build-runtime)
             ensure_deploy_profile
             warn_web_rebuild_if_profile_changed
             print_info "部署形态: $(_deploy_profile_desc) (EASYAIOT_DEPLOY_PROFILE=${EASYAIOT_DEPLOY_PROFILE})"
@@ -568,7 +543,9 @@ EasyAIoT 业务系统统一管理脚本
   restart       重启服务
   status        查看状态
   logs [服务名] 查看日志（可指定模块后接服务名，如 logs DEVICE iot-gateway）
-  build         重新构建镜像
+  build         重新构建镜像（各模块本地构建）
+  build-runtime 构建/推送运行时镜像到远程仓库（交互式）
+  pull          从远程仓库拉取预构建运行时镜像（交互式，默认 full）
   build-base    仅 DEVICE：Maven 编译并提取 Jar（第一阶段）
   clean         清理容器（DEVICE 保留镜像）
   clean-all     完全清理（DEVICE 含镜像；其他模块等同 clean）
@@ -589,6 +566,8 @@ EasyAIoT 业务系统统一管理脚本
 示例:
   $0 install
   $0 update WEB
+  $0 pull
+  $0 build-runtime
   $0 verify
   $0 verify DEVICE WEB
   $0 -m DEVICE,AI status
@@ -597,6 +576,7 @@ EasyAIoT 业务系统统一管理脚本
 
 说明:
   中间件请使用 .scripts/docker/install_linux.sh 或 install_middleware_linux.sh
+  运行时镜像仓库配置: .scripts/docker/runtime_registry.conf
   环境变量 EASYAIOT_DEPLOY_PROFILE: mini(1) | standard(2) | full(3，默认)
   日志: $LOG_DIR/
 EOF
@@ -627,7 +607,7 @@ parse_args() {
                 positional+=("${_mods[@]}")
                 shift 2
                 ;;
-            install|start|stop|restart|status|logs|build|build-base|clean|clean-all|update|verify|profile)
+            install|start|stop|restart|status|logs|build|build-base|clean|clean-all|update|verify|profile|pull|build-runtime|images-pull|images-build)
                 COMMAND="$arg"
                 shift
                 ;;
@@ -688,6 +668,22 @@ main() {
         install|start|restart|update|build|build-base|status)
             init_deploy_profile_for_command "$COMMAND"
             run_on_modules "$COMMAND" "${EXTRA_ARGS[@]}" || exit 1
+            ;;
+        pull|images-pull)
+            init_deploy_profile_for_command pull
+            check_docker
+            runtime_images_prepare_pull_interactive
+            runtime_images_export_for_invoke
+            runtime_images_invoke pull || exit 1
+            export EASYAIOT_SKIP_BUILD=1
+            export EASYAIOT_SKIP_IMAGE_PROMPT=1
+            ;;
+        build-runtime|images-build)
+            init_deploy_profile_for_command build-runtime
+            check_docker
+            runtime_images_prepare_build_interactive
+            runtime_images_export_for_invoke
+            runtime_images_invoke build || exit 1
             ;;
         stop|clean|clean-all)
             if [[ "$COMMAND" == clean* ]]; then

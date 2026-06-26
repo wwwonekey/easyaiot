@@ -11,14 +11,20 @@
 #        脚本可跨架构 COPY 运行；C/C++ 原生库需宿主机交叉编译工具链支持。
 #   3. 打标签并推送到远程仓库。
 #
-# 用法:
+# 推荐入口（交互式，无需参数，默认 full）:
+#   bash .scripts/docker/install_linux.sh pull|build-runtime
+#   bash .scripts/docker/install_business_linux.sh pull|build-runtime
+#
+# 远程仓库配置见 runtime_registry.conf（或 EASYAIOT_RUNTIME_REGISTRY 环境变量）
+#
+# 直接调用本脚本（支持命令行参数，适合 CI）:
 #   bash .scripts/docker/runtime_image.sh build [--push] [--tag <tag>] [--profile <profile>] [--registry <url>] [--native-source] [--force-rebuild]
 #   bash .scripts/docker/runtime_image.sh pull [--tag <tag>] [--profile <profile>] [--registry <url>]
 #
 # 选项:
 #   --push           构建后推送到远程仓库（仅 build）
 #   --tag <tag>      指定镜像标签（默认 latest）
-#   --registry <url> 指定推送/拉取仓库地址（默认 docker.cnb.cool/holmesian/easyaiot/）
+#   --registry <url> 指定推送/拉取仓库地址（默认见 runtime_registry.conf）
 #   --force-rebuild  强制重新构建，忽略已存在的镜像（默认跳过已有镜像）
 #   --profile <name> 指定部署形态：mini | standard | full
 #                    - build: 不指定则构建全部 3 种形态；指定则只构建该形态
@@ -53,6 +59,8 @@
 #     docker.cnb.cool/holmesian/easyaiot/aiot-web:amd64          → web-service:latest          (full)
 #     docker.cnb.cool/holmesian/easyaiot/aiot-web-mini:amd64     → web-service:latest-mini     (mini)
 #     docker.cnb.cool/holmesian/easyaiot/aiot-web-standard:amd64 → web-service:latest-standard (standard)
+#   仅 full 形态（APP 移动端 H5）:
+#     docker.cnb.cool/holmesian/easyaiot/aiot-app:amd64          → app-service:latest
 #
 # 示例:
 #   bash .scripts/docker/runtime_image.sh build --push
@@ -111,7 +119,7 @@ print_header()  {
 # ============================================================================
 TAG="latest"
 DO_PUSH=false
-REGISTRY="docker.cnb.cool/holmesian/easyaiot/"
+REGISTRY=""
 COMMAND=""
 NATIVE_SOURCE="${NATIVE_SOURCE:-false}"
 FORCE_REBUILD=false
@@ -154,6 +162,31 @@ fi
 # 部署形态配置
 # ============================================================================
 source "${SCRIPT_DIR}/deploy_profile.sh"
+# shellcheck source=runtime_image_common.sh
+source "${SCRIPT_DIR}/runtime_image_common.sh"
+
+runtime_load_registry
+REGISTRY=$(runtime_normalize_registry "${REGISTRY:-$RUNTIME_IMAGE_REGISTRY}")
+
+# 子进程/CI 通过环境变量传入的配置（install_linux.sh pull 等交互入口会设置）
+if [ -n "${EASYAIOT_RUNTIME_REGISTRY:-}" ]; then
+    REGISTRY=$(runtime_normalize_registry "$EASYAIOT_RUNTIME_REGISTRY")
+fi
+if [ -n "${EASYAIOT_RUNTIME_TAG:-}" ]; then
+    TAG="$EASYAIOT_RUNTIME_TAG"
+fi
+if [ "${EASYAIOT_RUNTIME_PUSH:-}" = "1" ] || [ "${EASYAIOT_RUNTIME_PUSH:-}" = "true" ]; then
+    DO_PUSH=true
+fi
+if [ "${EASYAIOT_RUNTIME_FORCE_REBUILD:-}" = "1" ] || [ "${FORCE_REBUILD:-}" = "true" ]; then
+    FORCE_REBUILD=true
+fi
+if [ -n "${EASYAIOT_RUNTIME_EXPLICIT_PROFILE:-}" ] && [ -z "${_EXPLICIT_PROFILE:-}" ]; then
+    _EXPLICIT_PROFILE="$EASYAIOT_RUNTIME_EXPLICIT_PROFILE"
+fi
+if [ "${EASYAIOT_RUNTIME_BUILD_ALL_PROFILES:-0}" = "1" ]; then
+    unset _EXPLICIT_PROFILE
+fi
 
 if [ -n "${_EXPLICIT_PROFILE:-}" ]; then
     case "$(_resolve_deploy_profile_raw)" in
@@ -189,30 +222,15 @@ fi
 export APT_MIRROR_URL PIP_INDEX_URL NPM_REGISTRY APK_MIRROR YUM_MIRROR_URL MAVEN_MIRROR_URL
 
 # ============================================================================
-# 多架构支持
+# 多架构支持（定义见 runtime_image_common.sh）
 # ============================================================================
-ALL_ARCHS=(amd64 arm64)
+ALL_ARCHS=("${ALL_RUNTIME_ARCHS[@]}")
 
-detect_arch() {
-    case "$(uname -m)" in
-        x86_64|amd64)   echo "amd64" ;;
-        aarch64|arm64)  echo "arm64" ;;
-        armv7l|armv6l)  echo "arm32" ;;
-        *)              echo "amd64" ;;
-    esac
-}
+detect_arch() { runtime_detect_arch; }
+is_native_arch() { runtime_is_native_arch "$1"; }
+arch_to_platform() { runtime_arch_to_platform "$1"; }
 
 CURRENT_ARCH=$(detect_arch)
-
-is_native_arch()  { [ "$1" = "$CURRENT_ARCH" ]; }
-arch_to_platform() {
-    case "$1" in
-        amd64) echo "linux/amd64" ;;
-        arm64) echo "linux/arm64" ;;
-        arm32) echo "linux/arm/v7" ;;
-        *)     echo "linux/amd64" ;;
-    esac
-}
 
 # 检测镜像实际架构
 image_actual_arch() {
@@ -235,79 +253,13 @@ verify_image_arch() {
 }
 
 # ============================================================================
-# 镜像映射表
+# 镜像映射与命名（数组与 runtime_* 定义见 runtime_image_common.sh）
 # ============================================================================
-# DEVICE 模块列表（统一由 build_device_all 构建）
-DEVICE_REMOTE_NAMES=(
-    aiot-gateway aiot-system aiot-infra aiot-device aiot-dataset
-    aiot-node aiot-tdengine aiot-file aiot-message aiot-sink aiot-gb28181
-)
-
-DEVICE_LOCAL_NAMES=(
-    iot-gateway iot-module-system-biz iot-module-infra-biz iot-module-device-biz
-    iot-module-dataset-biz iot-module-node-biz iot-module-tdengine-biz
-    iot-module-file-biz iot-module-message-biz iot-sink-biz iot-gb28181-biz
-)
-
-# 独立模块：remote_name|local_name|module_dir
-# DEVICE 模块不在此列表，统一由 build_device_all 处理
-INDEPENDENT_MODULES=(
-    "aiot-ai|ai-service|AI"
-    "aiot-video|video-service|VIDEO"
-    "aiot-web|web-service|WEB"
-)
-
-# 形态相关模块（WEB: VITE_GLOB_DEPLOY_PROFILE 编译进前端）
-PROFILE_DEPENDENT_REMOTES=(aiot-web)
-
-ALL_DEPLOY_PROFILES=(mini standard full)
-
-# 构建远程引用: <registry>/<name>[-<profile>]:<arch>
-# v3 命名规范：形态放在镜像名称中，架构作为标签
-#   full:    <registry>/<name>:<arch>
-#   mini:    <registry>/<name>-mini:<arch>
-#   standard:<registry>/<name>-standard:<arch>
-remote_ref() {
-    local name="$1" profile="${2:-}" arch="${3:-$CURRENT_ARCH}"
-    local image_name="${name}"
-    [ -n "$profile" ] && [ "$profile" != "full" ] && image_name="${name}-${profile}"
-    echo "${REGISTRY}${image_name}:${arch}"
-}
-
-# 多架构 manifest 引用（不含架构后缀，使用版本标签供 docker pull 自动匹配）
-# v3 命名规范：形态放在镜像名称中，标签使用 --tag 参数（默认 latest）
-manifest_ref() {
-    local name="$1" profile="${2:-}"
-    local image_name="${name}"
-    [ -n "$profile" ] && [ "$profile" != "full" ] && image_name="${name}-${profile}"
-    echo "${REGISTRY}${image_name}:${TAG}"
-}
-
-# 本地引用: local_name:tag[-profile]（full 形态省略 -full，与 remote_ref 一致）
-# 不再区分架构后缀：本机构建产物统一标签，跨架构通过远程标签区分
-local_ref() {
-    local name="$1" profile="${2:-}" arch="${3:-}"
-    local ref="${name}:${TAG}"
-    [ -n "$profile" ] && [ "$profile" != "full" ] && ref="${ref}-${profile}"
-    echo "$ref"
-}
-
-is_profile_dependent() {
-    for r in "${PROFILE_DEPENDENT_REMOTES[@]}"; do
-        [ "$r" = "$1" ] && return 0
-    done
-    return 1
-}
-
-# 形态中文标签
-_profile_label() {
-    case "$1" in
-        mini) echo "边缘精简版" ;;
-        standard) echo "标准版" ;;
-        full) echo "完整版" ;;
-        *) echo "$1" ;;
-    esac
-}
+remote_ref() { runtime_remote_ref "$@"; }
+manifest_ref() { runtime_manifest_ref "$@"; }
+local_ref() { runtime_local_ref "$@"; }
+is_profile_dependent() { runtime_is_profile_dependent "$@"; }
+_profile_label() { runtime_profile_label "$@"; }
 
 # ============================================================================
 # 跨架构构建支持（无 QEMU 依赖）
@@ -773,6 +725,7 @@ build_single_module() {
         aiot-ai)    build_module_with_install_script "AI" "ai-service" "$local_ref" "$target_arch" ;;
         aiot-video) build_module_with_install_script "VIDEO" "video-service" "$local_ref" "$target_arch" ;;
         aiot-web)   build_module_with_install_script "WEB" "web-service" "$local_ref" "$target_arch" ;;
+        aiot-app)   build_module_with_install_script "APP" "app-service" "$local_ref" "$target_arch" ;;
         *)
             # DEVICE 模块：统一由 build_device_all 处理
             build_device_all "$target_arch" || return 1
@@ -826,6 +779,7 @@ build_all_modules() {
     local total_profiles=${#build_profiles[@]}
 
     print_header "运行时镜像构建与推送"
+    runtime_log_registry_info
     echo "  当前架构: ${CURRENT_ARCH}"; printf '  构建架构: %s\n' "${build_archs[*]}"
     echo "  Registry: ${REGISTRY}"; echo "  Tag: ${TAG}"
     echo "  Push: ${DO_PUSH}"; echo "  强制重建: ${FORCE_REBUILD}"
@@ -895,6 +849,15 @@ build_all_modules() {
             local rname="${mapping%%|*}"; local tmp="${mapping#*|}"; local lname="${tmp%%|*}"
             is_profile_dependent "$rname" && continue
             _build_push_track "$rname" "$lname" "" "$target_arch"
+        done
+
+        # ── APP（仅 full 形态）──
+        local _bp
+        for _bp in "${build_profiles[@]}"; do
+            if [ "$_bp" = "full" ]; then
+                _build_push_track "aiot-app" "app-service" "" "$target_arch"
+                break
+            fi
         done
 
         # ── DEVICE ──
@@ -1035,6 +998,14 @@ build_all_modules() {
             echo "  ${lref}  (${size:-N/A})"
         fi
     done
+    for mapping in "${FULL_ONLY_MODULES[@]}"; do
+        local tmp="${mapping#*|}"; local lname="${tmp%%|*}"
+        local lref; lref=$(local_ref "$lname")
+        if docker image inspect "$lref" >/dev/null 2>&1; then
+            local size; size=$(docker image inspect "$lref" --format '{{.Size}}' 2>/dev/null | awk '{printf "%.1f MB", $1/1024/1024}')
+            echo "  ${lref}  (${size:-N/A})"
+        fi
+    done
     return 0
 }
 
@@ -1097,7 +1068,8 @@ select_pull_profile() {
 
 pull_all_images() {
     print_header "从仓库拉取运行时镜像"
-    echo "  当前架构: ${CURRENT_ARCH}"; echo "  Registry: ${REGISTRY}"; echo "  Tag: ${TAG}"; echo ""
+    runtime_log_registry_info
+    echo "  当前架构: ${CURRENT_ARCH}"; echo "  Tag: ${TAG}"; echo ""
     check_docker
     select_pull_profile
     local pull_profile="${EASYAIOT_DEPLOY_PROFILE}"
@@ -1133,13 +1105,31 @@ pull_all_images() {
         pull_and_tag_image "$rref" "$lref" && shared_ok=$((shared_ok + 1)) || shared_fail=$((shared_fail + 1))
     done
 
-    # 共享镜像总数 = 非形态相关的独立模块 + DEVICE 模块
+    # APP 模块（仅 full 形态）
+    if [ "$pull_profile" = "full" ]; then
+        for mapping in "${FULL_ONLY_MODULES[@]}"; do
+            local rname="${mapping%%|*}"; local tmp="${mapping#*|}"; local lname="${tmp%%|*}"
+            local rref; rref=$(remote_ref "$rname" "" "$CURRENT_ARCH")
+            local lref; lref=$(local_ref "$lname")
+
+            print_step "拉取: ${rref}"
+            if docker image inspect "$lref" >/dev/null 2>&1; then
+                print_info "${lref} 已存在，跳过"; shared_ok=$((shared_ok + 1)); continue
+            fi
+            pull_and_tag_image "$rref" "$lref" && shared_ok=$((shared_ok + 1)) || shared_fail=$((shared_fail + 1))
+        done
+    fi
+
+    # 共享镜像总数 = 非形态相关的独立模块 + DEVICE 模块 +（full 时）APP
     local shared_total=0
     for mapping in "${INDEPENDENT_MODULES[@]}"; do
         local rname="${mapping%%|*}"
         is_profile_dependent "$rname" || shared_total=$((shared_total + 1))
     done
     shared_total=$((shared_total + ${#DEVICE_REMOTE_NAMES[@]}))
+    if [ "$pull_profile" = "full" ]; then
+        shared_total=$((shared_total + ${#FULL_ONLY_MODULES[@]}))
+    fi
     echo ""
     print_info "共享镜像: 成功 ${shared_ok}/${shared_total}, 失败 ${shared_fail}/${shared_total}"
 
@@ -1217,7 +1207,7 @@ EOF
     else
         echo ""
         print_warning "有 ${failed_all} 个镜像拉取失败"
-        print_info "失败的镜像需要本地构建: bash .scripts/docker/runtime_image.sh build"
+        print_info "失败的镜像需要本地构建: bash .scripts/docker/install_linux.sh build-runtime"
         return 1
     fi
 
@@ -1241,6 +1231,16 @@ EOF
             echo "  ${lref}  (${size:-N/A})"
         fi
     done
+    if [ "$pull_profile" = "full" ]; then
+        for mapping in "${FULL_ONLY_MODULES[@]}"; do
+            local tmp="${mapping#*|}"; local lname="${tmp%%|*}"
+            local lref; lref=$(local_ref "$lname")
+            if docker image inspect "$lref" >/dev/null 2>&1; then
+                local size; size=$(docker image inspect "$lref" --format '{{.Size}}' 2>/dev/null | awk '{printf "%.1f MB", $1/1024/1024}')
+                echo "  ${lref}  (${size:-N/A})"
+            fi
+        done
+    fi
     return 0
 }
 

@@ -1,0 +1,485 @@
+#!/bin/bash
+# EasyAIoT 运行时镜像公共库
+# 供 runtime_image.sh、install_linux.sh、install_business_linux.sh 等脚本 source 复用。
+# 调用方需先设置 SCRIPT_DIR（.scripts/docker 目录）并已 source deploy_profile.sh。
+
+# shellcheck disable=SC2034
+[[ -n "${RUNTIME_IMAGE_COMMON_LOADED:-}" ]] && return 0
+RUNTIME_IMAGE_COMMON_LOADED=1
+
+: "${SCRIPT_DIR:?runtime_image_common.sh 需要 SCRIPT_DIR}"
+
+RUNTIME_IMAGE_SCRIPT="${RUNTIME_IMAGE_SCRIPT:-${SCRIPT_DIR}/runtime_image.sh}"
+RUNTIME_IMAGES_MARKER="${RUNTIME_IMAGES_MARKER:-${SCRIPT_DIR}/.runtime_images_pulled}"
+RUNTIME_REGISTRY_CONFIG="${RUNTIME_REGISTRY_CONFIG:-${SCRIPT_DIR}/runtime_registry.conf}"
+
+# 加载后由 runtime_load_registry() 填充（可被 EASYAIOT_RUNTIME_REGISTRY 环境变量覆盖）
+RUNTIME_IMAGE_REGISTRY=""
+
+# ============================================================================
+# 镜像映射表（远程名 ↔ 本地名）
+# ============================================================================
+DEVICE_REMOTE_NAMES=(
+    aiot-gateway aiot-system aiot-infra aiot-device aiot-dataset
+    aiot-node aiot-tdengine aiot-file aiot-message aiot-sink aiot-gb28181
+)
+
+DEVICE_LOCAL_NAMES=(
+    iot-gateway iot-module-system-biz iot-module-infra-biz iot-module-device-biz
+    iot-module-dataset-biz iot-module-node-biz iot-module-tdengine-biz
+    iot-module-file-biz iot-module-message-biz iot-sink-biz iot-gb28181-biz
+)
+
+INDEPENDENT_MODULES=(
+    "aiot-ai|ai-service|AI"
+    "aiot-video|video-service|VIDEO"
+    "aiot-web|web-service|WEB"
+)
+
+# 仅 full 全量形态部署（远程名 ↔ 本地名，与 INDEPENDENT_MODULES 格式相同）
+FULL_ONLY_MODULES=(
+    "aiot-app|app-service|APP"
+)
+
+PROFILE_DEPENDENT_REMOTES=(aiot-web)
+FULL_ONLY_REMOTES=(aiot-app)
+ALL_DEPLOY_PROFILES=(mini standard full)
+ALL_RUNTIME_ARCHS=(amd64 arm64)
+
+# ============================================================================
+# 架构检测
+# ============================================================================
+runtime_detect_arch() {
+    case "$(uname -m)" in
+        x86_64|amd64)   echo "amd64" ;;
+        aarch64|arm64)  echo "arm64" ;;
+        armv7l|armv6l)  echo "arm32" ;;
+        *)              echo "amd64" ;;
+    esac
+}
+
+runtime_arch_to_platform() {
+    case "$1" in
+        amd64) echo "linux/amd64" ;;
+        arm64) echo "linux/arm64" ;;
+        arm32) echo "linux/arm/v7" ;;
+        *)     echo "linux/amd64" ;;
+    esac
+}
+
+runtime_is_native_arch() {
+    [ "$1" = "$(runtime_detect_arch)" ]
+}
+
+# ============================================================================
+# 远程仓库配置（CNB）
+# ============================================================================
+runtime_load_registry() {
+    local from_file=""
+    if [ -f "$RUNTIME_REGISTRY_CONFIG" ]; then
+        from_file=$(sed -n 's/^[[:space:]]*REGISTRY=//p' "$RUNTIME_REGISTRY_CONFIG" 2>/dev/null | head -1)
+        from_file="${from_file//\"/}"
+        from_file="${from_file//\'/}"
+        from_file="${from_file%%#*}"
+        from_file="${from_file// /}"
+    fi
+    RUNTIME_IMAGE_REGISTRY=$(runtime_normalize_registry "${EASYAIOT_RUNTIME_REGISTRY:-${from_file:-docker.cnb.cool/holmesian/easyaiot/}}")
+    export RUNTIME_IMAGE_REGISTRY
+}
+
+runtime_log_registry_info() {
+    runtime_load_registry
+    runtime_img_msg info "========================================"
+    runtime_img_msg info "  运行时镜像仓库 (CNB)"
+    runtime_img_msg info "========================================"
+    runtime_img_msg info "  当前地址: ${RUNTIME_IMAGE_REGISTRY}"
+    runtime_img_msg info "  配置文件: ${RUNTIME_REGISTRY_CONFIG}"
+    runtime_img_msg info "  更换仓库:"
+    runtime_img_msg info "    1) 编辑上述配置文件，修改 REGISTRY= 一行（须以 / 结尾）"
+    runtime_img_msg info "    2) 或临时指定: export EASYAIOT_RUNTIME_REGISTRY=your.cool/namespace/project/"
+    runtime_img_msg info "========================================"
+}
+
+# 交互选择部署形态（默认 full）；非交互时使用环境变量或 full
+runtime_interactive_select_profile() {
+    local purpose="${1:-pull}"
+    if [ "${EASYAIOT_SKIP_PROFILE_PROMPT:-}" = "1" ]; then
+        ensure_deploy_profile 2>/dev/null || export EASYAIOT_DEPLOY_PROFILE="${EASYAIOT_DEPLOY_PROFILE:-full}"
+        return 0
+    fi
+    if [ ! -t 0 ]; then
+        export EASYAIOT_DEPLOY_PROFILE="${EASYAIOT_DEPLOY_PROFILE:-full}"
+        if declare -F apply_deploy_profile >/dev/null 2>&1; then
+            apply_deploy_profile
+            save_deploy_profile 2>/dev/null || true
+        fi
+        return 0
+    fi
+
+    echo ""
+    if [ "$purpose" = "build" ]; then
+        echo "请选择要构建的部署形态："
+        echo "  1) mini     — 边缘精简版"
+        echo "  2) standard — 标准版"
+        echo "  3) full     — 完整版（默认）"
+        echo "  4) 全部     — mini + standard + full"
+        echo ""
+        local choice=""
+        read -r -p "请输入选项 [1-4，默认 3]: " choice
+        case "${choice:-3}" in
+            1) export EASYAIOT_DEPLOY_PROFILE=mini; unset EASYAIOT_RUNTIME_BUILD_ALL_PROFILES ;;
+            2) export EASYAIOT_DEPLOY_PROFILE=standard; unset EASYAIOT_RUNTIME_BUILD_ALL_PROFILES ;;
+            4) export EASYAIOT_RUNTIME_BUILD_ALL_PROFILES=1; unset EASYAIOT_DEPLOY_PROFILE ;;
+            *) export EASYAIOT_DEPLOY_PROFILE=full; unset EASYAIOT_RUNTIME_BUILD_ALL_PROFILES ;;
+        esac
+    else
+        echo "请选择要拉取的部署形态："
+        echo "  1) mini     — 边缘精简版"
+        echo "  2) standard — 标准版"
+        echo "  3) full     — 完整版（默认）"
+        echo ""
+        local choice=""
+        read -r -p "请输入选项 [1-3，默认 3]: " choice
+        case "${choice:-3}" in
+            1) export EASYAIOT_DEPLOY_PROFILE=mini ;;
+            2) export EASYAIOT_DEPLOY_PROFILE=standard ;;
+            *) export EASYAIOT_DEPLOY_PROFILE=full ;;
+        esac
+    fi
+
+    if declare -F apply_deploy_profile >/dev/null 2>&1; then
+        apply_deploy_profile
+        save_deploy_profile 2>/dev/null || true
+        sync_deploy_profile_to_modules 2>/dev/null || true
+    fi
+    if [ "${EASYAIOT_RUNTIME_BUILD_ALL_PROFILES:-0}" = "1" ]; then
+        runtime_img_msg info "已选择: 全部形态 (mini + standard + full)"
+    else
+        runtime_img_msg info "已选择: $(runtime_profile_label "${EASYAIOT_DEPLOY_PROFILE}") (${EASYAIOT_DEPLOY_PROFILE})"
+    fi
+    echo ""
+}
+
+runtime_interactive_select_tag() {
+    if [ -n "${EASYAIOT_RUNTIME_TAG:-}" ]; then
+        return 0
+    fi
+    if [ ! -t 0 ]; then
+        export EASYAIOT_RUNTIME_TAG="${TAG:-latest}"
+        return 0
+    fi
+    local tag_input=""
+    read -r -p "镜像版本标签 [默认 latest]: " tag_input
+    export EASYAIOT_RUNTIME_TAG="${tag_input:-latest}"
+    runtime_img_msg info "镜像标签: ${EASYAIOT_RUNTIME_TAG}"
+}
+
+runtime_interactive_confirm_push() {
+    if [ -n "${EASYAIOT_RUNTIME_PUSH:-}" ]; then
+        return 0
+    fi
+    if [ ! -t 0 ]; then
+        export EASYAIOT_RUNTIME_PUSH="${EASYAIOT_RUNTIME_PUSH:-0}"
+        return 0
+    fi
+    echo ""
+    read -r -p "构建完成后推送到远程仓库？(Y/n) " push_resp
+    case "${push_resp:-Y}" in
+        n|N|no|NO) export EASYAIOT_RUNTIME_PUSH=0 ;;
+        *) export EASYAIOT_RUNTIME_PUSH=1 ;;
+    esac
+}
+
+runtime_interactive_confirm_force_rebuild() {
+    if [ -n "${FORCE_REBUILD:-}" ] && [ "${FORCE_REBUILD}" != "false" ]; then
+        export EASYAIOT_RUNTIME_FORCE_REBUILD=1
+        return 0
+    fi
+    if [ ! -t 0 ]; then
+        export EASYAIOT_RUNTIME_FORCE_REBUILD=0
+        return 0
+    fi
+    local fr=""
+    read -r -p "强制重新构建（忽略本地镜像缓存）？(y/N) " fr
+    case "${fr:-N}" in
+        y|Y|yes|YES) export EASYAIOT_RUNTIME_FORCE_REBUILD=1 ;;
+        *) export EASYAIOT_RUNTIME_FORCE_REBUILD=0 ;;
+    esac
+}
+
+# pull 前交互配置（install_linux.sh pull 等无参数入口）
+runtime_images_prepare_pull_interactive() {
+    runtime_log_registry_info
+    runtime_interactive_select_profile pull
+    runtime_interactive_select_tag
+    runtime_load_registry
+    export EASYAIOT_RUNTIME_REGISTRY="$RUNTIME_IMAGE_REGISTRY"
+    export REGISTRY="$RUNTIME_IMAGE_REGISTRY"
+}
+
+# build-runtime 前交互配置
+runtime_images_prepare_build_interactive() {
+    runtime_log_registry_info
+    runtime_interactive_select_profile build
+    runtime_interactive_select_tag
+    runtime_interactive_confirm_push
+    runtime_interactive_confirm_force_rebuild
+    runtime_load_registry
+    export EASYAIOT_RUNTIME_REGISTRY="$RUNTIME_IMAGE_REGISTRY"
+    export REGISTRY="$RUNTIME_IMAGE_REGISTRY"
+}
+
+# 将交互/环境变量导出给 runtime_image.sh 子进程
+runtime_images_export_for_invoke() {
+    runtime_load_registry
+    export EASYAIOT_RUNTIME_REGISTRY="${EASYAIOT_RUNTIME_REGISTRY:-$RUNTIME_IMAGE_REGISTRY}"
+    export REGISTRY="${REGISTRY:-$EASYAIOT_RUNTIME_REGISTRY}"
+    if [ -n "${EASYAIOT_RUNTIME_TAG:-}" ]; then
+        export EASYAIOT_RUNTIME_TAG
+        export TAG="$EASYAIOT_RUNTIME_TAG"
+    fi
+    if [ "${EASYAIOT_RUNTIME_PUSH:-0}" = "1" ] || [ "${EASYAIOT_RUNTIME_PUSH:-}" = "true" ]; then
+        export EASYAIOT_RUNTIME_PUSH=1
+    fi
+    if [ "${EASYAIOT_RUNTIME_FORCE_REBUILD:-0}" = "1" ]; then
+        export EASYAIOT_RUNTIME_FORCE_REBUILD=1
+        export FORCE_REBUILD=true
+    fi
+    if [ -n "${EASYAIOT_DEPLOY_PROFILE:-}" ] && [ "${EASYAIOT_RUNTIME_BUILD_ALL_PROFILES:-0}" != "1" ]; then
+        export EASYAIOT_RUNTIME_EXPLICIT_PROFILE="$EASYAIOT_DEPLOY_PROFILE"
+    fi
+    if [ "${EASYAIOT_RUNTIME_BUILD_ALL_PROFILES:-0}" = "1" ]; then
+        unset EASYAIOT_RUNTIME_EXPLICIT_PROFILE
+    fi
+}
+
+# ============================================================================
+# 镜像引用命名（v3：形态在镜像名，架构在标签）
+# ============================================================================
+runtime_normalize_registry() {
+    local r="${1:-$RUNTIME_IMAGE_REGISTRY}"
+    [[ "$r" != */ ]] && r="${r}/"
+    echo "$r"
+}
+
+runtime_remote_ref() {
+    local name="$1" profile="${2:-}" arch="${3:-$(runtime_detect_arch)}"
+    local registry; registry=$(runtime_normalize_registry "${REGISTRY:-$RUNTIME_IMAGE_REGISTRY}")
+    local image_name="${name}"
+    [ -n "$profile" ] && [ "$profile" != "full" ] && image_name="${name}-${profile}"
+    echo "${registry}${image_name}:${arch}"
+}
+
+runtime_manifest_ref() {
+    local name="$1" profile="${2:-}"
+    local registry; registry=$(runtime_normalize_registry "${REGISTRY:-$RUNTIME_IMAGE_REGISTRY}")
+    local tag="${TAG:-latest}"
+    local image_name="${name}"
+    [ -n "$profile" ] && [ "$profile" != "full" ] && image_name="${name}-${profile}"
+    echo "${registry}${image_name}:${tag}"
+}
+
+runtime_local_ref() {
+    local name="$1" profile="${2:-}"
+    local tag="${TAG:-latest}"
+    local ref="${name}:${tag}"
+    [ -n "$profile" ] && [ "$profile" != "full" ] && ref="${ref}-${profile}"
+    echo "$ref"
+}
+
+runtime_is_profile_dependent() {
+    local r="$1"
+    for x in "${PROFILE_DEPENDENT_REMOTES[@]}"; do
+        [ "$x" = "$r" ] && return 0
+    done
+    return 1
+}
+
+runtime_is_full_only() {
+    local r="$1"
+    for x in "${FULL_ONLY_REMOTES[@]}"; do
+        [ "$x" = "$r" ] && return 0
+    done
+    return 1
+}
+
+runtime_profile_label() {
+    case "$1" in
+        mini) echo "边缘精简版" ;;
+        standard) echo "标准版" ;;
+        full) echo "完整版" ;;
+        *) echo "$1" ;;
+    esac
+}
+
+# ============================================================================
+# 拉取标记与本地镜像就绪检测
+# ============================================================================
+# 返回 0 = 已拉取且本地镜像齐全，可跳过构建
+runtime_images_pulled_ready() {
+    local marker="${RUNTIME_IMAGES_MARKER}"
+    if [ ! -f "$marker" ]; then
+        return 1
+    fi
+
+    local pull_arch="" pull_profile="" pull_tag=""
+    pull_arch=$(sed -n 's/^PULL_ARCH=//p' "$marker" 2>/dev/null || true)
+    pull_profile=$(sed -n 's/^PULL_PROFILE=//p' "$marker" 2>/dev/null || true)
+    pull_tag=$(sed -n 's/^PULL_TAG=//p' "$marker" 2>/dev/null || true)
+
+    local current_arch; current_arch=$(runtime_detect_arch)
+    if [ "${pull_arch:-}" != "$current_arch" ]; then
+        runtime_img_msg info "拉取标记架构 (${pull_arch:-?}) 与当前 (${current_arch}) 不匹配，将重新构建"
+        return 1
+    fi
+
+    if declare -F ensure_deploy_profile >/dev/null 2>&1; then
+        ensure_deploy_profile
+    fi
+    local current_profile="${EASYAIOT_DEPLOY_PROFILE:-full}"
+    if [ "${pull_profile:-full}" != "$current_profile" ]; then
+        runtime_img_msg info "拉取标记形态 (${pull_profile:-full}) 与当前 (${current_profile}) 不匹配，将重新构建"
+        return 1
+    fi
+
+    local -a check_images=(
+        "ai-service:${pull_tag:-latest}"
+        "video-service:${pull_tag:-latest}"
+        "iot-gateway:${pull_tag:-latest}"
+    )
+    case "${pull_profile:-full}" in
+        mini)     check_images+=("web-service:${pull_tag:-latest}-mini") ;;
+        standard) check_images+=("web-service:${pull_tag:-latest}-standard") ;;
+        *)        check_images+=("web-service:${pull_tag:-latest}") ;;
+    esac
+    if [ "${pull_profile:-full}" = "full" ]; then
+        check_images+=("app-service:${pull_tag:-latest}")
+    fi
+
+    for img in "${check_images[@]}"; do
+        if ! docker image inspect "$img" >/dev/null 2>&1; then
+            runtime_img_msg warn "拉取的镜像 ${img} 不在本地，将重新构建"
+            return 1
+        fi
+    done
+
+    runtime_img_msg ok "检测到预构建镜像已就绪 (${pull_arch}, ${pull_profile:-full})，跳过构建"
+    return 0
+}
+
+# 轻量消息输出（source 方有 print_* 时复用）
+runtime_img_msg() {
+    local level="$1" text="$2"
+    case "$level" in
+        info)
+            if declare -F print_info >/dev/null 2>&1; then print_info "$text"; else echo "[INFO] $text"; fi ;;
+        warn)
+            if declare -F print_warning >/dev/null 2>&1; then print_warning "$text"; else echo "[WARN] $text"; fi ;;
+        ok)
+            if declare -F print_success >/dev/null 2>&1; then print_success "$text"; else echo "[OK] $text"; fi ;;
+        error)
+            if declare -F print_error >/dev/null 2>&1; then print_error "$text"; else echo "[ERROR] $text"; fi ;;
+        *) echo "$text" ;;
+    esac
+}
+
+# ============================================================================
+# 统一镜像获取（install / install_business 共用）
+# ============================================================================
+# 交互询问拉取或本地构建；成功拉取后设置 EASYAIOT_SKIP_BUILD 与 EASYAIOT_SKIP_IMAGE_PROMPT
+runtime_images_acquire() {
+    local skip_prompt="${1:-0}"
+    local do_local_build=0
+
+    if [ "$skip_prompt" != "1" ] && [ "${EASYAIOT_SKIP_IMAGE_PROMPT:-0}" != "1" ]; then
+        if [ -t 0 ]; then
+            runtime_img_msg info "========================================"
+            runtime_img_msg info "  镜像获取方式"
+            runtime_img_msg info "========================================"
+            runtime_img_msg info "  1) 拉取预构建镜像：从远程仓库下载（快速，默认）"
+            runtime_img_msg info "  2) 本地构建：编译并制作 Docker 镜像（耗时较长）"
+            echo ""
+            read -r -p "是否从远程仓库下载预构建的镜像？(Y/n) " _pull_response
+            case "${_pull_response:-Y}" in
+                n|N|no|NO) do_local_build=1 ;;
+                *) do_local_build=0 ;;
+            esac
+        else
+            runtime_img_msg info "非交互模式，默认拉取预构建镜像"
+        fi
+    elif runtime_images_pulled_ready; then
+        export EASYAIOT_SKIP_BUILD=1
+        export EASYAIOT_SKIP_IMAGE_PROMPT=1
+        return 0
+    fi
+
+    if [ "$do_local_build" -eq 0 ]; then
+        runtime_img_msg info "正在拉取预构建镜像..."
+        runtime_images_prepare_pull_interactive
+        runtime_images_export_for_invoke
+        if runtime_images_invoke pull; then
+            runtime_img_msg ok "预构建镜像拉取成功"
+            export EASYAIOT_SKIP_BUILD=1
+        else
+            runtime_img_msg warn "预构建镜像拉取失败，将尝试本地构建"
+            do_local_build=1
+        fi
+    fi
+
+    export EASYAIOT_SKIP_IMAGE_PROMPT=1
+    [ "$do_local_build" -eq 1 ] && return 1
+    return 0
+}
+
+# install 流程：拉取标记或本次拉取成功则跳过构建
+runtime_images_should_skip_build() {
+    if [ "${EASYAIOT_SKIP_BUILD:-0}" = "1" ]; then
+        return 0
+    fi
+    if runtime_images_pulled_ready; then
+        export EASYAIOT_SKIP_BUILD=1
+        return 0
+    fi
+    return 1
+}
+
+# 委托 runtime_image.sh（参数原样透传，如 --profile mini --tag v1.0）
+runtime_images_invoke() {
+    if [ ! -f "$RUNTIME_IMAGE_SCRIPT" ]; then
+        runtime_img_msg error "运行时镜像脚本不存在: ${RUNTIME_IMAGE_SCRIPT}"
+        return 1
+    fi
+    bash "$RUNTIME_IMAGE_SCRIPT" "$@"
+}
+
+# 显示运行时镜像管理用法摘要
+runtime_images_usage() {
+    cat <<EOF
+运行时镜像管理（业务模块 DEVICE/AI/VIDEO/WEB/APP，不含中间件；APP 仅 full）
+
+推荐入口（交互式，无需携带参数，默认部署形态 full）:
+  bash .scripts/docker/install_linux.sh pull
+  bash .scripts/docker/install_linux.sh build-runtime
+  bash .scripts/docker/install_business_linux.sh pull
+  bash .scripts/docker/install_business_linux.sh build-runtime
+
+远程仓库配置:
+  编辑 .scripts/docker/runtime_registry.conf 中的 REGISTRY=
+  或 export EASYAIOT_RUNTIME_REGISTRY=your.cool/namespace/project/
+
+非交互（CI）可用环境变量:
+  EASYAIOT_RUNTIME_REGISTRY  远程仓库地址
+  EASYAIOT_DEPLOY_PROFILE    部署形态 mini|standard|full
+  EASYAIOT_RUNTIME_TAG         镜像标签（默认 latest）
+  EASYAIOT_RUNTIME_PUSH=1      构建后推送（仅 build-runtime）
+  EASYAIOT_RUNTIME_BUILD_ALL_PROFILES=1  构建全部形态（仅 build-runtime）
+  EASYAIOT_RUNTIME_FORCE_REBUILD=1       强制重建
+
+也可直接调用 runtime_image.sh（支持命令行参数，适合 CI）:
+  bash .scripts/docker/runtime_image.sh pull
+  bash .scripts/docker/runtime_image.sh build --push
+EOF
+}
+
+# 初始化默认仓库地址
+runtime_load_registry

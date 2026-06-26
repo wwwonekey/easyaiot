@@ -36,6 +36,14 @@ EASYAIOT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 source "${EASYAIOT_ROOT}/.scripts/docker/init-build-cache-dirs.sh"
 # shellcheck source=../.scripts/docker/deploy_profile.sh
 source "${EASYAIOT_ROOT}/.scripts/docker/deploy_profile.sh"
+# 远程镜像公共库（aiot-app 拉取与 runtime_image.sh 共用命名规则）
+if [ -z "${RUNTIME_IMAGE_COMMON_LOADED:-}" ]; then
+    _app_saved_script_dir="$SCRIPT_DIR"
+    SCRIPT_DIR="${EASYAIOT_ROOT}/.scripts/docker"
+    # shellcheck source=../.scripts/docker/runtime_image_common.sh
+    source "${SCRIPT_DIR}/runtime_image_common.sh"
+    SCRIPT_DIR="$_app_saved_script_dir"
+fi
 
 # 打印带颜色的消息
 print_info() {
@@ -111,17 +119,13 @@ check_docker_compose() {
     fi
 }
 
-# 拉取远程预构建 APP 镜像（aiot-app:<arch> → app-service:latest）
+# 拉取远程预构建 APP 镜像（aiot-app:<arch> → app-service:latest，与 runtime_image.sh 一致）
 app_pull_prebuilt_image() {
-    local registry="${EASYAIOT_REGISTRY:-docker.cnb.cool/holmesian/easyaiot/}"
-    local arch=amd64
-    case "$(uname -m)" in
-        x86_64|amd64) arch=amd64 ;;
-        aarch64|arm64) arch=arm64 ;;
-        armv7l|armv6l) arch=arm32 ;;
-    esac
-    local rref="${registry}aiot-app:${arch}"
-    local lref="app-service:latest"
+    runtime_load_registry
+    export REGISTRY="${REGISTRY:-$RUNTIME_IMAGE_REGISTRY}"
+    local arch; arch=$(runtime_detect_arch)
+    local rref; rref=$(runtime_remote_ref "aiot-app" "" "$arch")
+    local lref; lref=$(runtime_local_ref "app-service")
     print_info "尝试拉取远程镜像: ${rref}"
     if docker pull "$rref" 2>/dev/null; then
         docker tag "$rref" "$lref" 2>/dev/null || true
@@ -620,8 +624,15 @@ install_service() {
         exit 1
     fi
 
-    # 镜像获取方式（install_business_linux.sh 已统一询问时跳过）
-    if [ "${EASYAIOT_SKIP_IMAGE_PROMPT:-0}" != "1" ]; then
+    # 镜像获取方式（install_business_linux.sh / install_linux.sh 已统一询问时跳过）
+    if [ "${EASYAIOT_SKIP_IMAGE_PROMPT:-0}" = "1" ]; then
+        if [ "${EASYAIOT_DEPLOY_PROFILE:-full}" = "full" ] \
+            && ! docker image inspect app-service:latest >/dev/null 2>&1; then
+            print_info "本地无 app-service 镜像，尝试从远程仓库拉取 aiot-app..."
+            app_pull_prebuilt_image && export EASYAIOT_SKIP_BUILD=1 \
+                || print_warning "APP 预构建镜像拉取失败，将尝试本地构建"
+        fi
+    else
         local _do_local_build=0
         if [ -t 0 ]; then
             print_info "========================================"

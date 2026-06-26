@@ -49,6 +49,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=deploy_profile.sh
 source "${SCRIPT_DIR}/deploy_profile.sh"
 
+# shellcheck source=runtime_image_common.sh
+source "${SCRIPT_DIR}/runtime_image_common.sh"
+
 # 日志文件配置
 LOG_DIR="${SCRIPT_DIR}/logs"
 mkdir -p "$LOG_DIR"
@@ -665,90 +668,22 @@ verify_service_health() {
     fi
 }
 
-# 检查 runtime_image.sh pull 是否已拉取过镜像，若已拉取则跳过构建直接启动
-# 返回 0 表示镜像已就绪可跳过构建，返回 1 表示需要本地构建
-_check_pulled_images_ready() {
-    local _marker="${SCRIPT_DIR}/.runtime_images_pulled"
-    if [ ! -f "$_marker" ]; then
-        return 1
-    fi
-
-    # 用 sed 安全提取字段值，避免 source 标记文件因意外含 `;;` 等特殊字符而引发语法错误
-    local _pull_arch="" _pull_profile="" _pull_tag=""
-    _pull_arch=$(sed -n 's/^PULL_ARCH=//p' "$_marker" 2>/dev/null || true)
-    _pull_profile=$(sed -n 's/^PULL_PROFILE=//p' "$_marker" 2>/dev/null || true)
-    _pull_tag=$(sed -n 's/^PULL_TAG=//p' "$_marker" 2>/dev/null || true)
-    _pull_arch="${_pull_arch:-}"
-    _pull_profile="${_pull_profile:-}"
-    _pull_tag="${_pull_tag:-}"
-    local _current_arch; _current_arch=$(uname -m)
-    case "$_current_arch" in
-        x86_64|amd64) _current_arch="amd64" ;;
-        arm64) _current_arch="arm64" ;;
-        *) _current_arch="amd64" ;;
-    esac
-
-    # 架构不匹配：标记是给别的架构拉取的，不能复用
-    if [ "${_pull_arch:-}" != "${_current_arch}" ]; then
-        print_info "拉取标记架构 (${_pull_arch:-?}) 与当前架构 (${_current_arch}) 不匹配，将重新构建"
-        return 1
-    fi
-
-    # 部署形态不匹配：标记是给别的形态拉取的，不能复用
-    # （如 mini 形态下的镜像缺少 GB28181 等前端配置，直接从 full 切换到 mini 时须重建）
-    ensure_deploy_profile
-    local _current_profile="${EASYAIOT_DEPLOY_PROFILE:-full}"
-    if [ "${_pull_profile:-full}" != "${_current_profile}" ]; then
-        print_info "拉取标记部署形态 (${_pull_profile:-full}) 与当前部署形态 (${_current_profile}) 不匹配，将重新构建"
-        return 1
-    fi
-
-    # 检查关键镜像是否在本地存在（用 docker image inspect 验证）
-    local _missing=0
-    local _check_images=(
-        "ai-service:${_pull_tag:-latest}"
-        "video-service:${_pull_tag:-latest}"
-        "iot-gateway:${_pull_tag:-latest}"
-    )
-    # 根据形态检查 WEB 镜像
-    case "${_pull_profile:-full}" in
-        mini)     _check_images+=("web-service:${_pull_tag:-latest}-mini") ;;
-        standard) _check_images+=("web-service:${_pull_tag:-latest}-standard") ;;
-        *)        _check_images+=("web-service:${_pull_tag:-latest}") ;;
-    esac
-
-    for _img in "${_check_images[@]}"; do
-        if ! docker image inspect "$_img" >/dev/null 2>&1; then
-            print_warning "拉取的镜像 ${_img} 不在本地，将重新构建"
-            _missing=1
-            break
-        fi
-    done
-
-    if [ "$_missing" -eq 1 ]; then
-        return 1
-    fi
-
-    print_success "检测到 runtime_image.sh pull 已拉取镜像 (${_pull_arch}, ${_pull_profile:-full})，跳过构建直接启动"
-    return 0
-}
-
 # 安装所有服务
 install_mac() {
     print_section "开始安装所有服务"
-    
+
+    select_deploy_profile_for_install
+    runtime_images_acquire
+
     check_macos
     check_docker "$@"
     check_docker_compose
     configure_docker_mirror
     create_network
     
-    # ★ 检测 runtime_image.sh pull 是否已拉取过镜像
-    #   若已拉取，业务模块跳过 docker build，直接用 start
     local _skip_build=0
-    if _check_pulled_images_ready; then
+    if runtime_images_should_skip_build; then
         _skip_build=1
-        export EASYAIOT_SKIP_BUILD=1
     fi
     
     local success_count=0
@@ -952,6 +887,24 @@ build_all() {
     done
     
     print_success "所有镜像构建完成"
+}
+
+pull_runtime_images() {
+    check_macos
+    check_docker "$@"
+    runtime_images_prepare_pull_interactive
+    runtime_images_export_for_invoke
+    runtime_images_invoke pull || exit 1
+    export EASYAIOT_SKIP_BUILD=1
+    export EASYAIOT_SKIP_IMAGE_PROMPT=1
+}
+
+build_runtime_images() {
+    check_macos
+    check_docker "$@"
+    runtime_images_prepare_build_interactive
+    runtime_images_export_for_invoke
+    runtime_images_invoke build || exit 1
 }
 
 # 检查并重新加载环境变量（macOS 版本）
@@ -1222,6 +1175,12 @@ main() {
             ;;
         build)
             build_all
+            ;;
+        build-runtime|images-build)
+            build_runtime_images
+            ;;
+        pull|images-pull)
+            pull_runtime_images
             ;;
         clean)
             clean_all
