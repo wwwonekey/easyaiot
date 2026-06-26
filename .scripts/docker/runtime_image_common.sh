@@ -350,20 +350,29 @@ runtime_interactive_confirm_push() {
 }
 
 runtime_interactive_confirm_force_rebuild() {
-    if [ -n "${FORCE_REBUILD:-}" ] && [ "${FORCE_REBUILD}" != "false" ]; then
+    if [ -n "${EASYAIOT_RUNTIME_FORCE_REBUILD:-}" ]; then
+        return 0
+    fi
+    if [ "${FORCE_REBUILD:-}" = "true" ]; then
         export EASYAIOT_RUNTIME_FORCE_REBUILD=1
         return 0
     fi
     if [ ! -t 0 ]; then
-        export EASYAIOT_RUNTIME_FORCE_REBUILD=0
+        export EASYAIOT_RUNTIME_FORCE_REBUILD="${EASYAIOT_RUNTIME_FORCE_REBUILD:-1}"
         return 0
     fi
+    echo ""
     local fr=""
-    read -r -p "强制重新构建（忽略本地镜像缓存）？(y/N) " fr
-    case "${fr:-N}" in
-        y|Y|yes|YES) export EASYAIOT_RUNTIME_FORCE_REBUILD=1 ;;
-        *) export EASYAIOT_RUNTIME_FORCE_REBUILD=0 ;;
+    read -r -p "强制重新构建（忽略本地镜像缓存）？(Y/n) " fr
+    case "${fr:-Y}" in
+        n|N|no|NO) export EASYAIOT_RUNTIME_FORCE_REBUILD=0 ;;
+        *) export EASYAIOT_RUNTIME_FORCE_REBUILD=1 ;;
     esac
+    if [ "${EASYAIOT_RUNTIME_FORCE_REBUILD}" = "1" ]; then
+        runtime_img_msg info "已选择: 强制重新构建（忽略本地镜像缓存）"
+    else
+        runtime_img_msg info "已选择: 复用本地镜像（已存在则跳过构建，直接推送）"
+    fi
 }
 
 # pull 前交互配置（install_linux.sh pull 等无参数入口）
@@ -401,9 +410,12 @@ runtime_images_export_for_invoke() {
     if [ "${EASYAIOT_RUNTIME_PUSH:-0}" = "1" ] || [ "${EASYAIOT_RUNTIME_PUSH:-}" = "true" ]; then
         export EASYAIOT_RUNTIME_PUSH=1
     fi
-    if [ "${EASYAIOT_RUNTIME_FORCE_REBUILD:-0}" = "1" ]; then
+    if [ "${EASYAIOT_RUNTIME_FORCE_REBUILD:-1}" = "1" ]; then
         export EASYAIOT_RUNTIME_FORCE_REBUILD=1
         export FORCE_REBUILD=true
+    else
+        export EASYAIOT_RUNTIME_FORCE_REBUILD=0
+        export FORCE_REBUILD=false
     fi
     if [ -n "${EASYAIOT_DEPLOY_PROFILE:-}" ] && [ "${EASYAIOT_RUNTIME_BUILD_ALL_PROFILES:-0}" != "1" ]; then
         export EASYAIOT_RUNTIME_EXPLICIT_PROFILE="$EASYAIOT_DEPLOY_PROFILE"
@@ -633,7 +645,8 @@ runtime_images_usage() {
   EASYAIOT_RUNTIME_TAG         镜像标签（默认 latest）
   EASYAIOT_RUNTIME_PUSH=1      构建后推送（仅 build-runtime）
   EASYAIOT_RUNTIME_BUILD_ALL_PROFILES=1  构建全部形态（仅 build-runtime）
-  EASYAIOT_RUNTIME_FORCE_REBUILD=1       强制重建
+  EASYAIOT_RUNTIME_FORCE_REBUILD=1       强制重建（交互式 build-runtime 默认开启）
+  EASYAIOT_RUNTIME_FORCE_REBUILD=0       复用本地镜像（已存在则跳过构建，直接推送）
   EASYAIOT_SKIP_REGISTRY_AUTH_CHECK=1     跳过 build-runtime 前的 CNB 登录/推送权限检查
 
 build-runtime 会在构建开始前校验 CNB 登录与推送权限；未登录请先执行:

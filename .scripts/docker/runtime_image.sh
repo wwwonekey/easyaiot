@@ -529,31 +529,15 @@ build_module_with_install_script() {
     local native_ref
     native_ref=$(local_ref "$local_name")
 
-    # --force-rebuild：强制重建，跳过"已存在"检查
+    # --force-rebuild：强制重建，跳过"已存在"检查；否则检查目标 local_ref 是否已就绪
     if ! $FORCE_REBUILD; then
-        if is_native_arch "$target_arch"; then
-            # 本机架构：检查现有镜像
-            if docker image inspect "$native_ref" >/dev/null 2>&1; then
-                local existing; existing=$(image_actual_arch "$native_ref")
-                if [ "$existing" = "$target_arch" ]; then
-                    print_info "${native_ref} 已存在（${existing}），跳过构建"
-                    # ★ 如果 native_ref != local_ref（带 profile 后缀），创建额外标签
-                    if [ "$native_ref" != "$local_ref" ]; then
-                        docker tag "$native_ref" "$local_ref" 2>/dev/null || true
-                    fi
-                    return 0
-                fi
-                print_info "${native_ref} 架构不匹配 (现有=${existing}, 期望=${target_arch})，重新构建"
+        if docker image inspect "$local_ref" >/dev/null 2>&1; then
+            local existing; existing=$(image_actual_arch "$local_ref")
+            if [ "$existing" = "$target_arch" ]; then
+                print_info "${local_ref} 已存在（${existing}），跳过构建"
+                return 0
             fi
-        else
-            # 跨架构：检查是否已有目标架构镜像（通过 local_ref 检查）
-            if docker image inspect "$local_ref" >/dev/null 2>&1; then
-                local existing; existing=$(image_actual_arch "$local_ref")
-                if [ "$existing" = "$target_arch" ]; then
-                    print_info "${local_ref} (跨架构) 已存在 (${existing})，跳过构建"
-                    return 0
-                fi
-            fi
+            print_info "${local_ref} 架构不匹配 (现有=${existing}, 期望=${target_arch})，重新构建"
         fi
     else
         print_info "强制重建模式：忽略已存在的镜像缓存"
@@ -626,14 +610,62 @@ build_module_with_install_script() {
         fi
     fi
 
-    # 本机构建也校验架构一致性
-    if is_native_arch "$target_arch" && ! verify_image_arch "$native_ref" "$target_arch"; then
-        print_error "本机构建产物架构校验失败，镜像已删除"
-        docker rmi "$native_ref" 2>/dev/null || true
-        rm -f "$build_log"
-        return 1
+    # 本机构建也校验架构一致性（优先校验目标 local_ref，兼容 install 脚本产出在 native_ref 的情况）
+    if is_native_arch "$target_arch"; then
+        local verify_ref="$local_ref"
+        if ! docker image inspect "$verify_ref" >/dev/null 2>&1; then
+            verify_ref="$native_ref"
+        fi
+        if ! verify_image_arch "$verify_ref" "$target_arch"; then
+            print_error "本机构建产物架构校验失败，镜像已删除"
+            docker rmi "$verify_ref" 2>/dev/null || true
+            rm -f "$build_log"
+            return 1
+        fi
     fi
     rm -f "$build_log"
+    return 0
+}
+
+# 检查单个本地镜像是否已就绪（存在且架构匹配）
+local_image_ready() {
+    local lname="$1" profile="$2" target_arch="$3"
+    local lref; lref=$(local_ref "$lname" "$profile")
+    if ! docker image inspect "$lref" >/dev/null 2>&1; then
+        return 1
+    fi
+    local actual; actual=$(image_actual_arch "$lref")
+    [ "$actual" = "$target_arch" ]
+}
+
+# 检查构建计划中所有本地镜像是否已就绪（依赖外层 build_profiles / build_archs）
+all_build_plan_images_ready() {
+    local target_arch profile mapping tmp rname lname
+
+    for target_arch in "${build_archs[@]}"; do
+        for mapping in "${INDEPENDENT_MODULES[@]}"; do
+            rname="${mapping%%|*}"; tmp="${mapping#*|}"; lname="${tmp%%|*}"
+            is_profile_dependent "$rname" && continue
+            local_image_ready "$lname" "" "$target_arch" || return 1
+        done
+
+        for profile in "${build_profiles[@]}"; do
+            if [ "$profile" = "full" ]; then
+                for mapping in "${FULL_ONLY_MODULES[@]}"; do
+                    tmp="${mapping#*|}"; lname="${tmp%%|*}"
+                    local_image_ready "$lname" "" "$target_arch" || return 1
+                done
+            fi
+        done
+
+        for lname in "${DEVICE_LOCAL_NAMES[@]}"; do
+            local_image_ready "$lname" "" "$target_arch" || return 1
+        done
+
+        for profile in "${build_profiles[@]}"; do
+            local_image_ready "web-service" "$profile" "$target_arch" || return 1
+        done
+    done
     return 0
 }
 
@@ -647,6 +679,17 @@ build_device_all() {
 
     [ -f "$install_script" ] || { print_error "DEVICE 安装脚本不存在: ${install_script}"; return 1; }
     grep -q $'\r' "$install_script" 2>/dev/null && sed -i 's/\r$//' "$install_script" 2>/dev/null || true
+
+    if ! $FORCE_REBUILD; then
+        local all_device_ready=true
+        for lname in "${DEVICE_LOCAL_NAMES[@]}"; do
+            local_image_ready "$lname" "" "$target_arch" || { all_device_ready=false; break; }
+        done
+        if $all_device_ready; then
+            print_info "DEVICE 模块本地镜像已全部就绪（${target_arch}），跳过构建"
+            return 0
+        fi
+    fi
 
     local arch_note=""; ! is_native_arch "$target_arch" && arch_note=" [跨架构: ${target_arch}]"
     print_info "执行 DEVICE/install_linux.sh build${arch_note}（Maven 编译 + 镜像构建）..."
@@ -796,8 +839,12 @@ build_all_modules() {
 
     # ========================================================================
     # 阶段 0：宿主机本机编译（install_linux.sh build）
+    # 非强制重建且全部本地镜像已就绪时，跳过耗时的本机编译
     # ========================================================================
-    if ! ensure_native_build; then
+    if ! $FORCE_REBUILD && all_build_plan_images_ready; then
+        print_info "所有计划的本地运行时镜像已就绪，跳过本机编译（install_linux.sh build）"
+        _NATIVE_BUILT=1
+    elif ! ensure_native_build; then
         print_error "本机编译失败，无法继续构建镜像"
         exit 1
     fi
