@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict cTdIb1ZKCLgnJYT7zdc3RMA0wdX0gxCRo6n9THxLiXwDqdJ4dWSOEQ3kt9C1ooI
+\restrict wXM60PrMhNIuXawq89Q2VJdEfHBE41nfQov51aS8IymDHEIt1K8QLFPwECJgoGi
 
 -- Dumped from database version 18.4 (Debian 18.4-1.pgdg13+1)
 -- Dumped by pg_dump version 18.4 (Debian 18.4-1.pgdg13+1)
@@ -27,10 +27,10 @@ DROP DATABASE IF EXISTS "iot-video20";
 CREATE DATABASE "iot-video20" WITH TEMPLATE = template0 ENCODING = 'UTF8' LOCALE_PROVIDER = libc LOCALE = 'en_US.utf8';
 
 
-\unrestrict cTdIb1ZKCLgnJYT7zdc3RMA0wdX0gxCRo6n9THxLiXwDqdJ4dWSOEQ3kt9C1ooI
+\unrestrict wXM60PrMhNIuXawq89Q2VJdEfHBE41nfQov51aS8IymDHEIt1K8QLFPwECJgoGi
 \encoding SQL_ASCII
 \connect -reuse-previous=on "dbname='iot-video20'"
-\restrict cTdIb1ZKCLgnJYT7zdc3RMA0wdX0gxCRo6n9THxLiXwDqdJ4dWSOEQ3kt9C1ooI
+\restrict wXM60PrMhNIuXawq89Q2VJdEfHBE41nfQov51aS8IymDHEIt1K8QLFPwECJgoGi
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -452,7 +452,7 @@ CREATE TABLE public.algorithm_task (
     task_type character varying(20) NOT NULL,
     model_ids text,
     model_names text,
-    extract_interval integer NOT NULL,
+    extract_interval integer,
     rtmp_input_url character varying(500),
     rtmp_output_url character varying(500),
     tracking_enabled boolean NOT NULL,
@@ -503,6 +503,8 @@ CREATE TABLE public.algorithm_task (
     description character varying(500),
     sam_supplement_enabled boolean NOT NULL,
     sam_supplement_config text,
+    motion_gate_enabled boolean NOT NULL,
+    motion_gate_config text,
     post_process_enabled boolean NOT NULL,
     post_process_script character varying(255),
     post_process_replicas integer NOT NULL,
@@ -554,7 +556,7 @@ COMMENT ON COLUMN public.algorithm_task.model_names IS '关联的模型名称列
 -- Name: COLUMN algorithm_task.extract_interval; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON COLUMN public.algorithm_task.extract_interval IS '抽帧间隔（每N帧抽一次，仅实时算法任务）';
+COMMENT ON COLUMN public.algorithm_task.extract_interval IS '抽帧间隔（每N帧抽一次；NULL 表示沿用环境变量 EXTRACT_INTERVAL）';
 
 
 --
@@ -905,6 +907,20 @@ COMMENT ON COLUMN public.algorithm_task.sam_supplement_enabled IS '是否启用 
 --
 
 COMMENT ON COLUMN public.algorithm_task.sam_supplement_config IS 'SAM 补充配置 JSON';
+
+
+--
+-- Name: COLUMN algorithm_task.motion_gate_enabled; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.algorithm_task.motion_gate_enabled IS '是否启用运动检测门控（仅实时算法任务）';
+
+
+--
+-- Name: COLUMN algorithm_task.motion_gate_config; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.algorithm_task.motion_gate_config IS '运动门控配置 JSON';
 
 
 --
@@ -5268,7 +5284,7 @@ COPY public.algorithm_post_process_result (id, task_id, task_name, task_code, ta
 -- Data for Name: algorithm_task; Type: TABLE DATA; Schema: public; Owner: -
 --
 
-COPY public.algorithm_task (id, task_name, task_code, task_type, model_ids, model_names, extract_interval, rtmp_input_url, rtmp_output_url, tracking_enabled, tracking_similarity_threshold, tracking_max_age, tracking_smooth_alpha, alert_event_enabled, alert_event_suppress_time, alert_class_names, face_detection_enabled, plate_detection_enabled, face_matching_enabled, face_library_ids, face_matching_threshold, plate_matching_enabled, plate_library_ids, matching_business_tags, alert_notification_enabled, alert_notification_config, alarm_suppress_time, last_notify_time, space_id, cron_expression, frame_skip, patrol_mode, patrol_interval_sec, patrol_pool_size, focus_device_id, status, is_enabled, run_status, exception_reason, schedule_policy, prefer_gpu, target_node_id, node_id, service_server_ip, service_port, service_process_id, service_last_heartbeat, service_log_path, total_frames, total_detections, total_captures, last_process_time, last_success_time, last_capture_time, description, sam_supplement_enabled, sam_supplement_config, post_process_enabled, post_process_script, post_process_replicas, defense_mode, defense_schedule, created_at, updated_at, face_library_id, plate_library_id) FROM stdin;
+COPY public.algorithm_task (id, task_name, task_code, task_type, model_ids, model_names, extract_interval, rtmp_input_url, rtmp_output_url, tracking_enabled, tracking_similarity_threshold, tracking_max_age, tracking_smooth_alpha, alert_event_enabled, alert_event_suppress_time, alert_class_names, face_detection_enabled, plate_detection_enabled, face_matching_enabled, face_library_ids, face_matching_threshold, plate_matching_enabled, plate_library_ids, matching_business_tags, alert_notification_enabled, alert_notification_config, alarm_suppress_time, last_notify_time, space_id, cron_expression, frame_skip, patrol_mode, patrol_interval_sec, patrol_pool_size, focus_device_id, status, is_enabled, run_status, exception_reason, schedule_policy, prefer_gpu, target_node_id, node_id, service_server_ip, service_port, service_process_id, service_last_heartbeat, service_log_path, total_frames, total_detections, total_captures, last_process_time, last_success_time, last_capture_time, description, sam_supplement_enabled, sam_supplement_config, motion_gate_enabled, motion_gate_config, post_process_enabled, post_process_script, post_process_replicas, defense_mode, defense_schedule, created_at, updated_at, face_library_id, plate_library_id) FROM stdin;
 \.
 
 
@@ -5309,7 +5325,7 @@ COPY public.device_detection_region (id, device_id, region_name, region_type, po
 --
 
 COPY public.device_directory (id, name, parent_id, description, sort_order, snap_save_time, record_save_time, created_at, updated_at) FROM stdin;
-1	默认分组	\N	未手动分组的摄像头（含直连与国标）	-1000	168	168	2026-06-25 07:01:17.84903	2026-06-25 07:01:17.849032
+1	默认分组	\N	未手动分组的摄像头（含直连与国标）	-1000	1	1	2026-06-30 06:37:32.777755	2026-06-30 06:37:32.777757
 \.
 
 
@@ -6698,5 +6714,5 @@ ALTER TABLE ONLY public.tracking_target
 -- PostgreSQL database dump complete
 --
 
-\unrestrict cTdIb1ZKCLgnJYT7zdc3RMA0wdX0gxCRo6n9THxLiXwDqdJ4dWSOEQ3kt9C1ooI
+\unrestrict wXM60PrMhNIuXawq89Q2VJdEfHBE41nfQov51aS8IymDHEIt1K8QLFPwECJgoGi
 

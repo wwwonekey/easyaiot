@@ -905,7 +905,8 @@ class AlgorithmTask(db.Model):
     model_names = db.Column(db.Text, nullable=True, comment='关联的模型名称列表（逗号分隔，冗余字段，用于快速显示）')
     
     # 实时算法任务配置
-    extract_interval = db.Column(db.Integer, default=25, nullable=False, comment='抽帧间隔（每N帧抽一次，仅实时算法任务）')
+    extract_interval = db.Column(db.Integer, default=25, nullable=True,
+                                 comment='抽帧间隔（每N帧抽一次；NULL 时沿用 EXTRACT_INTERVAL，默认 25）')
     rtmp_input_url = db.Column(db.String(500), nullable=True, comment='RTMP输入流地址（仅实时算法任务）')
     rtmp_output_url = db.Column(db.String(500), nullable=True, comment='RTMP输出流地址（仅实时算法任务）')
     
@@ -980,6 +981,11 @@ class AlgorithmTask(db.Model):
     # SAM 补充识别配置
     sam_supplement_enabled = db.Column(db.Boolean, default=False, nullable=False, comment='是否启用 SAM 补充识别')
     sam_supplement_config = db.Column(db.Text, nullable=True, comment='SAM 补充配置 JSON')
+
+    # 运动检测门控（实时算法任务资源优化）
+    motion_gate_enabled = db.Column(db.Boolean, default=False, nullable=False,
+                                    comment='是否启用运动检测门控（仅实时算法任务）')
+    motion_gate_config = db.Column(db.Text, nullable=True, comment='运动门控配置 JSON')
 
     # AI 后处理（用户 Python 脚本）
     post_process_enabled = db.Column(db.Boolean, default=False, nullable=False, comment='是否启用 AI 后处理脚本')
@@ -1131,6 +1137,8 @@ class AlgorithmTask(db.Model):
             'algorithm_services': algorithm_services_list,  # 添加算法模型服务列表
             'sam_supplement_enabled': bool(self.sam_supplement_enabled),
             'sam_supplement_config': json.loads(self.sam_supplement_config) if self.sam_supplement_config else None,
+            'motion_gate_enabled': bool(getattr(self, 'motion_gate_enabled', False)),
+            'motion_gate_config': json.loads(self.motion_gate_config) if getattr(self, 'motion_gate_config', None) else None,
             'post_process_enabled': bool(self.post_process_enabled),
             'post_process_script': self.post_process_script,
             'post_process_replicas': int(self.post_process_replicas or 1),

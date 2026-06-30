@@ -124,6 +124,16 @@ def _serialize_sam_supplement_config(config) -> Optional[str]:
     return None
 
 
+def _serialize_motion_gate_config(config) -> Optional[str]:
+    if config is None:
+        return None
+    if isinstance(config, str):
+        return config if config.strip() else None
+    if isinstance(config, dict):
+        return json.dumps(config, ensure_ascii=False)
+    return None
+
+
 def _has_library_matching_scope(library_ids) -> bool:
     return bool(_normalize_library_ids(library_ids))
 
@@ -551,7 +561,7 @@ def create_algorithm_task(task_name: str,
                          task_type: str = 'realtime',
                          device_ids: Optional[List[str]] = None,
                          model_ids: Optional[List[int]] = None,
-                         extract_interval: int = 25,
+                         extract_interval: Optional[int] = 25,
                          tracking_enabled: bool = False,
                          tracking_similarity_threshold: float = 0.2,
                          tracking_max_age: int = 25,
@@ -584,6 +594,8 @@ def create_algorithm_task(task_name: str,
                          focus_device_id: Optional[str] = None,
                          sam_supplement_enabled: bool = False,
                          sam_supplement_config=None,
+                         motion_gate_enabled: bool = False,
+                         motion_gate_config=None,
                          post_process_enabled: bool = False,
                          post_process_replicas: int = 1) -> AlgorithmTask:
     """创建算法任务"""
@@ -818,7 +830,7 @@ def create_algorithm_task(task_name: str,
             task_type=task_type,
             model_ids=model_ids_json,
             model_names=model_names,
-            extract_interval=extract_interval if task_type == 'realtime' else 25,
+            extract_interval=extract_interval if task_type == 'realtime' else None,
             rtmp_input_url=None,  # 不再使用，从摄像头列表获取RTSP流地址
             rtmp_output_url=None,  # 不再使用，从摄像头列表获取RTMP流地址
             tracking_enabled=tracking_enabled if task_type == 'realtime' else False,
@@ -854,6 +866,8 @@ def create_algorithm_task(task_name: str,
             target_node_id=target_node_id,
             sam_supplement_enabled=bool(sam_supplement_enabled),
             sam_supplement_config=_serialize_sam_supplement_config(sam_supplement_config),
+            motion_gate_enabled=bool(motion_gate_enabled) if task_type == 'realtime' else False,
+            motion_gate_config=_serialize_motion_gate_config(motion_gate_config) if task_type == 'realtime' else None,
             post_process_enabled=bool(post_process_enabled),
             post_process_replicas=max(1, int(post_process_replicas or 1)),
         )
@@ -1028,12 +1042,18 @@ def update_algorithm_task(task_id: int, **kwargs) -> AlgorithmTask:
             'defense_mode', 'defense_schedule',
             'schedule_policy', 'prefer_gpu', 'target_node_id',
             'sam_supplement_enabled', 'sam_supplement_config',
+            'motion_gate_enabled', 'motion_gate_config',
             'post_process_enabled', 'post_process_script', 'post_process_replicas',
         ]
         
         if 'sam_supplement_config' in kwargs:
             kwargs['sam_supplement_config'] = _serialize_sam_supplement_config(
                 kwargs['sam_supplement_config']
+            )
+
+        if 'motion_gate_config' in kwargs:
+            kwargs['motion_gate_config'] = _serialize_motion_gate_config(
+                kwargs['motion_gate_config']
             )
         
         # 验证布防模式

@@ -663,8 +663,35 @@ const [registerForm, { setFieldsValue, validate, resetFields, updateSchema, getF
         placeholder: '每N帧抽一次',
         min: 1,
       },
-      helpMessage: '实时算法任务中，每N帧抽一次进行检测（默认25）',
+      helpMessage: '实时算法任务中，每N帧抽一次进行AI检测（默认25，即25帧抽1帧）。推流仍保持全帧率。',
       ifShow: ({ values }) => values.task_type === 'realtime',
+    },
+    {
+      field: 'motion_gate_enabled',
+      label: '启用运动补检',
+      component: 'Switch',
+      defaultValue: false,
+      componentProps: {
+        checkedChildren: '是',
+        unCheckedChildren: '否',
+      },
+      helpMessage: '在抽帧采样点评估画面变化；仅大面积持续变化时记录命中。风吹草动等局部抖动不会频繁触发额外检测。',
+      ifShow: ({ values }) => values.task_type === 'realtime',
+    },
+    {
+      field: 'motion_sensitivity',
+      label: '运动检测灵敏度',
+      component: 'Select',
+      defaultValue: 'conservative',
+      componentProps: {
+        options: [
+          { label: '保守（户外/有植被，推荐）', value: 'conservative' },
+          { label: '标准', value: 'standard' },
+          { label: '灵敏（室内，慎用）', value: 'sensitive' },
+        ],
+      },
+      helpMessage: '保守模式要求更大变化面积与连续确认，避免风吹草动误触发。',
+      ifShow: ({ values }) => values.task_type === 'realtime' && !!values.motion_gate_enabled,
     },
     {
       field: 'tracking_enabled',
@@ -1213,6 +1240,8 @@ const [register, { setDrawerProps, closeDrawer }] = useDrawerInner(async (data) 
       frame_skip: record.frame_skip || 25,
       model_ids: modelIds,
       extract_interval: record.extract_interval || 25,
+      motion_gate_enabled: record.motion_gate_enabled === true,
+      motion_sensitivity: record.motion_gate_config?.preset || 'conservative',
       tracking_enabled: record.tracking_enabled || false,
       tracking_similarity_threshold: record.tracking_similarity_threshold || 0.2,
       tracking_max_age: record.tracking_max_age || 25,
@@ -1258,6 +1287,8 @@ const [register, { setDrawerProps, closeDrawer }] = useDrawerInner(async (data) 
         { field: 'frame_skip', componentProps: { disabled: true } },
         { field: 'model_ids', componentProps: { disabled: true } },
         { field: 'extract_interval', componentProps: { disabled: true } },
+        { field: 'motion_gate_enabled', componentProps: { disabled: true } },
+        { field: 'motion_sensitivity', componentProps: { disabled: true } },
         { field: 'tracking_enabled', componentProps: { disabled: true } },
         { field: 'tracking_similarity_threshold', componentProps: { disabled: true } },
         { field: 'tracking_max_age', componentProps: { disabled: true } },
@@ -1339,6 +1370,8 @@ const [register, { setDrawerProps, closeDrawer }] = useDrawerInner(async (data) 
       cron_expression: DEFAULT_SNAP_CRON,
       frame_skip: 25,
       extract_interval: 25,
+      motion_gate_enabled: false,
+      motion_sensitivity: 'conservative',
       tracking_enabled: false,
       tracking_similarity_threshold: 0.2,
       tracking_max_age: 25,
@@ -1627,6 +1660,17 @@ const handleSubmit = async () => {
     delete values.sam_interval_frames;
     delete values.sam_conf;
 
+    if (values.task_type === 'realtime') {
+      values.motion_gate_enabled = values.motion_gate_enabled === true;
+      values.motion_gate_config = values.motion_gate_enabled
+        ? { preset: values.motion_sensitivity || 'conservative' }
+        : null;
+    } else {
+      values.motion_gate_enabled = false;
+      values.motion_gate_config = null;
+    }
+    delete values.motion_sensitivity;
+
     values.post_process_enabled = !!values.post_process_enabled;
     if (values.post_process_enabled) {
       values.post_process_replicas = Math.max(1, Number(values.post_process_replicas) || 1);
@@ -1712,6 +1756,8 @@ const handleReset = () => {
       target_node_id: undefined,
       frame_skip: 25,
       extract_interval: 25,
+      motion_gate_enabled: false,
+      motion_sensitivity: 'conservative',
       tracking_enabled: false,
       tracking_similarity_threshold: 0.2,
       tracking_max_age: 25,
@@ -1765,6 +1811,8 @@ const handleReset = () => {
       frame_skip: record.frame_skip || 25,
       model_ids: modelIds,
       extract_interval: record.extract_interval || 25,
+      motion_gate_enabled: record.motion_gate_enabled === true,
+      motion_sensitivity: record.motion_gate_config?.preset || 'conservative',
       tracking_enabled: record.tracking_enabled || false,
       tracking_similarity_threshold: record.tracking_similarity_threshold || 0.2,
       tracking_max_age: record.tracking_max_age || 25,

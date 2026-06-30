@@ -42,6 +42,8 @@ export interface AlgorithmTask {
   model_names?: string; // 关联的模型名称列表（逗号分隔，冗余字段，用于快速显示）
   // 实时算法任务配置
   extract_interval?: number; // 抽帧间隔（每N帧抽一次）
+  motion_gate_enabled?: boolean;
+  motion_gate_config?: { preset?: string; [key: string]: unknown };
   // 追踪配置
   tracking_enabled?: boolean; // 是否启用目标追踪
   tracking_similarity_threshold?: number; // 追踪相似度阈值

@@ -337,7 +337,22 @@ sync_web_deploy_profile_env() {
 sync_deploy_profile_to_modules() {
     local root="${1:-$(_deploy_profile_repo_root)}"
     apply_python_service_deploy_env "$root"
+    apply_device_deploy_env "$root"
     sync_web_deploy_profile_env "$root"
+}
+
+# DEVICE：按形态写入 .env（docker compose 自动读取，供 IOT_SYSTEM_SPRING_PROFILES_ACTIVE 等变量替换）
+apply_device_deploy_env() {
+    local root="${1:-$(_deploy_profile_repo_root)}"
+    local env_file="${root}/DEVICE/.env"
+    mkdir -p "$(dirname "$env_file")"
+    touch "$env_file"
+    if is_mini_deploy_profile; then
+        _set_env_docker_kv "$env_file" IOT_SYSTEM_SPRING_PROFILES_ACTIVE "local,mini"
+    else
+        _set_env_docker_kv "$env_file" IOT_SYSTEM_SPRING_PROFILES_ACTIVE "local"
+    fi
+    _set_env_docker_kv "$env_file" IOT_SINK_SPRING_PROFILES_ACTIVE "$(iot_sink_spring_profiles_active)"
 }
 
 # 若 WEB 镜像构建时的形态与当前不一致，提示需 rebuild（前端 VITE_GLOB_DEPLOY_PROFILE 编译进镜像）

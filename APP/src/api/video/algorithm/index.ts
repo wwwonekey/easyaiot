@@ -17,6 +17,8 @@ export interface AlgorithmTask {
   total_captures?: number
   last_process_time?: string
   extract_interval?: number
+  motion_gate_enabled?: boolean
+  motion_gate_config?: { preset?: string }
   cron_expression?: string
   alert_event_enabled?: boolean
   schedule_policy?: 'local' | 'auto' | 'node'
@@ -72,6 +74,8 @@ export interface AlgorithmTaskPayload {
   prefer_gpu?: boolean
   target_node_id?: number | null
   extract_interval?: number
+  motion_gate_enabled?: boolean
+  motion_gate_config?: { preset?: string }
   cron_expression?: string
   patrol_interval_sec?: number
   alert_event_enabled?: boolean

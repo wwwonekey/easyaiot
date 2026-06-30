@@ -106,6 +106,13 @@
           <wd-input v-model="extractIntervalText" type="number" placeholder="每 N 帧抽一次（默认 25）" clearable />
         </view>
 
+        <view v-if="form.task_type === 'realtime'" class="mb-24rpx flex items-center justify-between">
+          <view class="text-26rpx text-[#666]">
+            启用运动补检
+          </view>
+          <wd-switch v-model="form.motion_gate_enabled" />
+        </view>
+
         <view v-if="form.task_type === 'snap'" class="mb-24rpx">
           <view class="mb-12rpx text-26rpx text-[#666]">
             Cron 表达式 <text class="text-[#f56c6c]">*</text>
@@ -251,6 +258,7 @@ const form = reactive({
   prefer_gpu: true,
   target_node_id: undefined as number | undefined,
   extract_interval: undefined as number | undefined,
+  motion_gate_enabled: false,
   cron_expression: '',
   patrol_interval_sec: undefined as number | undefined,
   alert_event_enabled: false,
@@ -319,6 +327,7 @@ function resetForm() {
   form.prefer_gpu = true
   form.target_node_id = undefined
   form.extract_interval = undefined
+  form.motion_gate_enabled = false
   form.cron_expression = ''
   form.patrol_interval_sec = undefined
   form.alert_event_enabled = false
@@ -432,6 +441,12 @@ async function handleSubmit() {
 
   if (form.task_type === 'realtime' && form.extract_interval != null)
     payload.extract_interval = form.extract_interval
+  if (form.task_type === 'realtime') {
+    payload.motion_gate_enabled = form.motion_gate_enabled
+    payload.motion_gate_config = form.motion_gate_enabled
+      ? { preset: 'conservative' }
+      : null
+  }
   if (form.task_type === 'snap')
     payload.cron_expression = form.cron_expression.trim()
   if (form.task_type === 'patrol' && form.patrol_interval_sec != null)
@@ -479,6 +494,7 @@ async function openEdit(item: AlgorithmTask) {
   form.prefer_gpu = item.prefer_gpu !== false
   form.target_node_id = item.target_node_id ?? undefined
   form.extract_interval = item.extract_interval
+  form.motion_gate_enabled = item.motion_gate_enabled === true
   form.cron_expression = item.cron_expression || ''
   form.patrol_interval_sec = (item as any).patrol_interval_sec
   form.alert_event_enabled = item.alert_event_enabled === true
