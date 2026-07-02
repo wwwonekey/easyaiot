@@ -105,24 +105,23 @@ append_requirements_file() {
 
 prepare_flattened_requirements_arm() {
     local req_file="$1"  # requirements.txt (ARM 版含 torch)
-    local out_file out_dir
-    # ★ 在项目 .build-cache 下创建临时文件，确保 Docker 挂载时路径可达
+    local out_file out_dir tmp_req
+    # ★ 使用确定性文件名（按模块），避免 mktemp 随机后缀在 Docker 挂载时产生隐式竞态
     out_dir="$(easyaiot_build_cache_base "$EASYAIOT_ROOT")/tmp"
     mkdir -p "$out_dir"
-    out_file="$(mktemp "${out_dir}/flat-requirements-arm-XXXXXX")"
-    : > "$out_file"
-    echo "--index-url https://mirrors.cloud.tencent.com/pypi/simple" >> "$out_file"
+    out_file="${out_dir}/requirements-${CACHE_MODULE}-arm-flat.txt"
+    tmp_req="${out_dir}/requirements-${CACHE_MODULE}-arm-src.txt"
+    echo "--index-url https://mirrors.cloud.tencent.com/pypi/simple" > "$out_file"
     if [ ! -f "$req_file" ]; then
         print_error "requirements 不存在: $req_file"
         rm -f "$out_file"
         return 1
     fi
     # 先做 onnxruntime-gpu → onnxruntime 替换，再展开 -r 引用
-    local tmp_req
-    tmp_req="$(mktemp "${out_dir}/tmp-req-arm-XXXXXX")"
     sed 's/onnxruntime-gpu>=/onnxruntime>=/g' "$req_file" > "$tmp_req"
     append_requirements_file "$tmp_req" "$out_file"
     rm -f "$tmp_req"
+    sync -f "$out_file" 2>/dev/null || true
     echo "$out_file"
 }
 
@@ -134,16 +133,20 @@ fi
 download_pip_packages() {
     local flat_req
     flat_req="$(prepare_flattened_requirements_arm "$REQ_SOURCE")"
-    trap 'rm -f "$flat_req"' RETURN
 
     print_info "[${CACHE_MODULE}] ARM pip wheel → ${PIP_WHEELS_DIR}"
     print_info "[${CACHE_MODULE}] requirements 扁平化: $(wc -l < "$flat_req") 行"
 
-    # ★ 挂载前校验：确保 flat_req 是普通文件（非目录），防止 Docker 创建空目录
+    # ★ 挂载前双重校验：确保 flat_req 是普通文件（非目录/空文件），防止 Docker 创建空目录
     if [ ! -f "$flat_req" ]; then
         print_error "[${CACHE_MODULE}] 扁平化 requirements 文件无效或为目录: ${flat_req}"
         return 1
     fi
+    if [ ! -s "$flat_req" ]; then
+        print_error "[${CACHE_MODULE}] 扁平化 requirements 文件为空: ${flat_req}"
+        return 1
+    fi
+    print_info "[${CACHE_MODULE}] 挂载 requirements: ${flat_req} (size=$(stat -c%s "$flat_req" 2>/dev/null || wc -c < "$flat_req") bytes)"
 
     set +e
     docker run --rm \

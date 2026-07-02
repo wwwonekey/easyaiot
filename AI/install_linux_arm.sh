@@ -130,6 +130,7 @@ build_with_cache() {
     init_build_cache_dirs
     enable_docker_buildkit
     optimize_dockerfile_pip_cache Dockerfile.arm
+    prepare_cached_resources
 
     cache_opts="--build-arg BASE_IMAGE=${ARM_BASE_IMAGE} --build-arg OFFLINE_MODE=${OFFLINE_MODE:-0}"
     cache_opts="$cache_opts --build-arg YUM_MIRROR_URL=${YUM_MIRROR_URL:-https://mirrors.cloud.tencent.com}"
@@ -584,12 +585,19 @@ build_image() {
     detect_architecture
     configure_architecture
     configure_arm_dockerfile
+
+    if [ "${FORCE_REBUILD:-0}" != "1" ] && docker image inspect ai-service:latest >/dev/null 2>&1; then
+        print_success "ai-service:latest 已存在，跳过 Docker 构建（强制重建请设置 FORCE_REBUILD=1）"
+        return 0
+    fi
     
     print_info "架构: $ARCH, 平台: $DOCKER_PLATFORM, 基础镜像: $ARM_BASE_IMAGE"
     print_warning "重新构建可能需要较长时间（20-40分钟），请耐心等待..."
     echo ""
-    
-    if ! build_with_cache "--no-cache"; then
+
+    local cache_flag=""
+    [ "${FORCE_REBUILD:-0}" = "1" ] && cache_flag="--no-cache"
+    if ! build_with_cache "$cache_flag"; then
         exit 1
     fi
     echo ""

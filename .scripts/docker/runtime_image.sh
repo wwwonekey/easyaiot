@@ -170,6 +170,8 @@ fi
 # 部署形态配置
 # ============================================================================
 source "${SCRIPT_DIR}/deploy_profile.sh"
+# shellcheck source=init-build-cache-dirs.sh
+source "${SCRIPT_DIR}/init-build-cache-dirs.sh"
 # shellcheck source=runtime_image_common.sh
 source "${SCRIPT_DIR}/runtime_image_common.sh"
 
@@ -1069,6 +1071,16 @@ build_all_modules() {
                 fi
             done
         fi
+
+        # ★ ARM 构建前预下载 pip wheel / ffmpeg 到 .build-cache/arm/
+        case "$target_arch" in
+            arm64|arm32)
+                print_info "检查 ARM 离线缓存（.build-cache/arm/ pip-wheels + ffmpeg）..."
+                ensure_arm_python_wheels_cached "$PROJECT_ROOT"
+                ensure_arm_ffmpeg_cached "$PROJECT_ROOT"
+                stage_arm_ffmpeg_into_build_context "$PROJECT_ROOT" "${PROJECT_ROOT}/VIDEO" || true
+                ;;
+        esac
 
         # ── 共享模块（AI + VIDEO）──
         for mapping in "${INDEPENDENT_MODULES[@]}"; do
