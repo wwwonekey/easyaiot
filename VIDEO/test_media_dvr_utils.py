@@ -10,6 +10,7 @@ if VIDEO_ROOT not in sys.path:
 
 from app.services.media_dvr_utils import (  # noqa: E402
     discover_srs_host_data_root,
+    parse_record_minio_object_event_time,
     resolve_playback_absolute_path,
 )
 
@@ -45,6 +46,12 @@ class MediaDvrUtilsTest(unittest.TestCase):
             self.assertEqual(resolve_playback_absolute_path(path), path)
         finally:
             os.remove(path)
+
+    def test_parse_record_minio_object_time_from_path(self):
+        event_time = parse_record_minio_object_event_time('1782976988203789777/2026/07/02/1782982220439.flv')
+        self.assertEqual(event_time.year, 2026)
+        self.assertEqual(event_time.month, 7)
+        self.assertEqual(event_time.day, 2)
 
 
 if __name__ == '__main__':

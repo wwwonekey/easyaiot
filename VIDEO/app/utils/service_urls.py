@@ -151,6 +151,20 @@ def epoch_to_shanghai_datetime(ts: float) -> datetime:
     return datetime.fromtimestamp(float(ts), tz=timezone.utc).astimezone(SHANGHAI_TZ)
 
 
+def save_time_cutoff_naive(save_time_hours) -> datetime | None:
+    """东八区 naive 截止时间，与 event_time/captured_at（东八区墙钟）直接比较。
+
+    save_time_hours <= 0 表示永久保存，返回 None。
+    """
+    try:
+        hours = int(save_time_hours)
+    except (TypeError, ValueError):
+        return None
+    if hours <= 0:
+        return None
+    return (datetime.now(SHANGHAI_TZ) - timedelta(hours=hours)).replace(tzinfo=None)
+
+
 def playback_segment_utc_starts(event_time):
     """返回录像片段可能的 UTC 起始时刻（含旧版时区误标数据）。"""
     aware = ensure_shanghai_aware(event_time)

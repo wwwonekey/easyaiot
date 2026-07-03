@@ -40,6 +40,27 @@ def parse_srs_dvr_segment_start_from_filename(absolute_file_path: str):
         return None
 
 
+def parse_record_minio_object_event_time(object_name: str, last_modified=None) -> Optional[dt]:
+    """从 MinIO 录像 object key（device/YYYY/MM/DD/filename）解析东八区 naive 事件时间。"""
+    parts = [p for p in (object_name or '').replace('\\', '/').split('/') if p]
+    if len(parts) >= 4:
+        y, mo, d = parts[1], parts[2], parts[3]
+        if len(y) == 4 and y.isdigit() and mo.isdigit() and d.isdigit():
+            filename = parts[-1]
+            segment_start = parse_srs_dvr_segment_start_from_filename(f'/{filename}')
+            if segment_start is not None:
+                return segment_start.replace(tzinfo=None)
+            try:
+                return dt(int(y), int(mo), int(d), tzinfo=SHANGHAI_TZ).replace(tzinfo=None)
+            except ValueError:
+                pass
+    if last_modified is not None:
+        if last_modified.tzinfo is None:
+            return last_modified
+        return last_modified.astimezone(SHANGHAI_TZ).replace(tzinfo=None)
+    return None
+
+
 def parse_srs_dvr_path_date(absolute_file_path: str) -> Tuple[Optional[str], Optional[dt]]:
     segment_start = parse_srs_dvr_segment_start_from_filename(absolute_file_path)
     parts = [p for p in absolute_file_path.replace('\\', '/').split('/') if p]
