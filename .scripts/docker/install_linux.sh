@@ -266,16 +266,44 @@ _detect_docker_rootless() {
     docker info --format '{{.SecurityOptions}}' 2>/dev/null | grep -q "rootless"
 }
 
+# 容器创建实测用的探测镜像（按优先级）。
+# 注：registry-mirrors 代理拉取时，错误/日志里仍会显示 docker.io/library/...，属 Docker 正常行为，不代表未走镜像源。
+_DOCKER_PROBE_IMAGES=(
+    "alpine:latest"
+    "docker.m.daocloud.io/library/alpine:latest"
+)
+
+# 确保探测镜像在本地可用；本地已有则跳过拉取。
+_ensure_docker_probe_image() {
+    local _img="$1"
+    docker image inspect "$_img" >/dev/null 2>&1 && return 0
+    docker pull "$_img" >/dev/null 2>&1
+}
+
 # 用最简单的容器实测 Docker 是否当前能成功创建容器。
 # 成功返回 0，失败返回 1 并设置 _DOCKER_CREATE_FAIL_MSG。
 _verify_docker_create() {
-    local _test_output
-    _test_output=$(docker run --rm alpine:latest echo "docker_create_test" 2>&1) && return 0
-    _DOCKER_CREATE_FAIL_MSG="$_test_output"
+    local _img _test_output _pull_failed=0
+    for _img in "${_DOCKER_PROBE_IMAGES[@]}"; do
+        if ! _ensure_docker_probe_image "$_img"; then
+            _pull_failed=1
+            continue
+        fi
+        _test_output=$(docker run --rm "$_img" echo "docker_create_test" 2>&1) && return 0
+        _DOCKER_CREATE_FAIL_MSG="$_test_output"
 
-    # 尝试用 io.containerd.runc.v2 运行时（部分环境与 runc 行为不同）
-    _test_output=$(docker run --rm --runtime io.containerd.runc.v2 alpine:latest echo "docker_create_test" 2>&1) && return 0
-    _DOCKER_CREATE_FAIL_MSG="$_test_output"
+        # 尝试用 io.containerd.runc.v2 运行时（部分环境与 runc 行为不同）
+        _test_output=$(docker run --rm --runtime io.containerd.runc.v2 "$_img" echo "docker_create_test" 2>&1) && return 0
+        _DOCKER_CREATE_FAIL_MSG="$_test_output"
+    done
+
+    if [ "$_pull_failed" -eq 1 ]; then
+        _DOCKER_CREATE_FAIL_MSG="${_DOCKER_CREATE_FAIL_MSG:-探测镜像拉取失败}"
+        _DOCKER_CREATE_FAIL_MSG="${_DOCKER_CREATE_FAIL_MSG}
+
+提示：错误里出现 docker.io 是 Docker 的镜像引用写法；若已配置 registry-mirrors，实际请求可能经镜像站转发。
+请确认: docker info | grep -A5 'Registry Mirrors'；或手动拉取: docker pull docker.m.daocloud.io/library/alpine:latest"
+    fi
 
     return 1
 }
@@ -698,8 +726,8 @@ install_linux() {
 
     check_docker "$@"
     check_docker_compose
-    prepare_runtime_environment
     configure_docker_mirror
+    prepare_runtime_environment
     create_network
 
     # 若已拉取预构建镜像，业务模块跳过 docker build
@@ -1080,6 +1108,7 @@ start_all() {
     print_info "部署形态: $(_deploy_profile_desc) (EASYAIOT_DEPLOY_PROFILE=${EASYAIOT_DEPLOY_PROFILE})"
     check_docker "$@"
     check_docker_compose
+    configure_docker_mirror
     prepare_runtime_environment
     create_network
     
@@ -1145,6 +1174,7 @@ restart_all() {
     print_info "部署形态: $(_deploy_profile_desc) (EASYAIOT_DEPLOY_PROFILE=${EASYAIOT_DEPLOY_PROFILE})"
     check_docker "$@"
     check_docker_compose
+    configure_docker_mirror
     prepare_runtime_environment
     create_network
     
@@ -1297,6 +1327,7 @@ update_all() {
     print_info "部署形态: $(_deploy_profile_desc) (EASYAIOT_DEPLOY_PROFILE=${EASYAIOT_DEPLOY_PROFILE})"
     check_docker "$@"
     check_docker_compose
+    configure_docker_mirror
     prepare_runtime_environment
     create_network
     
