@@ -1012,8 +1012,74 @@ def _public_read_policy(bucket_name):
     })
 
 
+def _persist_screenshot_record(
+    camera_id,
+    download_url,
+    unique_filename,
+    timestamp,
+    image_format,
+    width,
+    height,
+):
+    """将截图元数据写入数据库。"""
+    try:
+        image_record = Image(
+            filename=unique_filename,
+            original_filename=f"{camera_id}_{timestamp}.{image_format}",
+            path=download_url,
+            width=width,
+            height=height,
+            device_id=camera_id,
+        )
+        db.session.add(image_record)
+        db.session.commit()
+        logger.info(f"图片信息已存入数据库，ID: {image_record.id}")
+    except Exception as db_error:
+        db.session.rollback()
+        logger.error(f"数据库存储失败: {str(db_error)}")
+
+
+def _upload_screenshot_to_local(camera_id, image_data, image_format="jpg"):
+    """mini 形态：截图落本地磁盘，经 /video/alert/image 对外提供访问。"""
+    from datetime import datetime as _dt
+
+    from app.services.playback_disk_guard_service import get_camera_screenshot_dir
+    from app.utils.service_urls import build_alert_image_api_url
+
+    timestamp = _dt.now().strftime("%Y%m%d_%H%M%S")
+    unique_filename = f"{uuid.uuid4().hex}.{image_format}"
+
+    success, encoded_image = cv2.imencode(f'.{image_format}', image_data)
+    if not success:
+        raise RuntimeError("图像编码失败")
+
+    height, width = image_data.shape[:2]
+    screenshot_root = get_camera_screenshot_dir()
+    device_dir = os.path.join(screenshot_root, str(camera_id))
+    os.makedirs(device_dir, exist_ok=True)
+    local_path = os.path.join(device_dir, unique_filename)
+    with open(local_path, 'wb') as handle:
+        handle.write(encoded_image.tobytes())
+
+    download_url = build_alert_image_api_url(local_path)
+    _persist_screenshot_record(
+        camera_id, download_url, unique_filename, timestamp, image_format, width, height
+    )
+    logger.info(f"截图本地保存成功: {local_path}")
+    return download_url
+
+
 def upload_screenshot_to_minio(camera_id, image_data, image_format="jpg"):
-    """上传摄像头截图到MinIO并存入数据库"""
+    """上传摄像头截图（MinIO 或 mini 本地）并存入数据库。"""
+    from app.utils.service_urls import minio_storage_enabled
+
+    if not minio_storage_enabled():
+        try:
+            return _upload_screenshot_to_local(camera_id, image_data, image_format)
+        except Exception as e:
+            logger.error(f"截图本地保存失败: {str(e)}")
+            return None
+
     try:
         minio_client = get_minio_client()
         bucket_name = "camera-screenshots"
@@ -1053,23 +1119,9 @@ def upload_screenshot_to_minio(camera_id, image_data, image_format="jpg"):
 
         # 使用统一的URL格式
         download_url = f"/api/v1/buckets/{bucket_name}/objects/download?prefix={object_name}"
-
-        # 将图片信息存入数据库
-        try:
-            image_record = Image(
-                filename=unique_filename,
-                original_filename=f"{camera_id}_{timestamp}.{image_format}",
-                path=download_url,
-                width=width,
-                height=height,
-                device_id=camera_id
-            )
-            db.session.add(image_record)
-            db.session.commit()
-            logger.info(f"图片信息已存入数据库，ID: {image_record.id}")
-        except Exception as db_error:
-            db.session.rollback()
-            logger.error(f"数据库存储失败: {str(db_error)}")
+        _persist_screenshot_record(
+            camera_id, download_url, unique_filename, timestamp, image_format, width, height
+        )
         logger.info(f"截图上传成功: {bucket_name}/{object_name}")
         return download_url
     except S3Error as e:

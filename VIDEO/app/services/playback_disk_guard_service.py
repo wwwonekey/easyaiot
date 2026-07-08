@@ -81,6 +81,19 @@ def get_snap_staging_dir() -> str:
         return os.path.join(host_root.rstrip('/\\'), 'snaps')
 
 
+def get_camera_screenshot_dir() -> str:
+    """区域检测/设备封面等截图的本地落盘目录（mini 形态，不部署 MinIO）。"""
+    explicit = (os.getenv('MEDIA_CAMERA_SCREENSHOT_DIR') or '').strip()
+    if explicit:
+        return explicit.rstrip('/\\')
+    record_dir = (os.getenv('MEDIA_RECORD_DIR') or get_srs_record_dir()).strip()
+    if record_dir.startswith('/data'):
+        return os.path.join('/data', 'camera-screenshots')
+    snap_root = get_snap_staging_dir()
+    parent = os.path.dirname(snap_root.rstrip('/\\'))
+    return os.path.join(parent, 'camera-screenshots')
+
+
 def _playback_dir_mode() -> int:
     raw = os.getenv('PLAYBACK_DIR_MODE', '777')
     try:
