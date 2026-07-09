@@ -645,7 +645,7 @@ interface AppState {
 // 状态管理
 const state = reactive<AppState>({
   activeSource: 'image',
-  confidenceThreshold: 70,
+  confidenceThreshold: 35,
   cooldownTime: 5,
   showOriginal: true,
   detectionStatus: 'idle',
@@ -945,7 +945,7 @@ const loadDetectionParams = async () => {
   try {
     // 模拟API调用
     const params = await new Promise<any>(resolve => setTimeout(() => resolve({
-      confidenceThreshold: 70,
+      confidenceThreshold: 35,
       cooldownTime: 5,
       showOriginal: true
     }), 300));
@@ -1046,7 +1046,12 @@ const startDetection = async () => {
     // 设置推理参数
     const parameters: Record<string, any> = {
       conf_thres: state.confidenceThreshold / 100,
-      iou_thres: 0.45
+      iou_thres: 0.45,
+      // 实时流检测参数走后端算法任务默认值（YOLO26=0.10，其余=0.25）
+      use_stream_algorithm_defaults: state.activeSource === 'camera',
+      stream_imgsz: 640,
+      // 与 VIDEO OVERLAY_EXTRACT_INTERVAL 一致：每 5 帧检测一次，推流不阻塞
+      stream_extract_interval: 5,
     };
     if (
       isCustomModelSelected.value &&

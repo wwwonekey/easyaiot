@@ -30,6 +30,16 @@ from db_models import Model, InferenceTask, db
 from app.utils.onnx_inference import ONNXInference
 from app.utils.yolo_chinese_font import ensure_ultralytics_chinese_plot_font
 from app.utils.model_class_utils import parse_class_names_json, resolve_class_ids_from_names
+from app.utils.algorithm_detection_draw import (
+    ALGORITHM_DEFAULT_CONF,
+    draw_algorithm_detections,
+    yolo_results_to_detections,
+)
+from app.utils.rtsp_stream_pipeline import RtspStreamPipeline
+from app.utils.stream_detect_utils import (
+    build_stream_detect_config,
+    warmup_stream_detection,
+)
 
 
 _active_rtsp_sessions: Dict[str, dict] = {}
@@ -659,7 +669,19 @@ class InferenceService:
         class_ids = self._resolve_class_ids(model, parameters)
         if class_ids:
             inference_kwargs['classes'] = class_ids
+        inference_kwargs.setdefault('max_det', 300)
         return inference_kwargs
+
+    @staticmethod
+    def _annotate_frame_algorithm_style(
+        frame: np.ndarray,
+        *,
+        yolo_result=None,
+        detections: Optional[list] = None,
+    ) -> np.ndarray:
+        """使用与 VIDEO 算法任务一致的绿框样式绘制检测结果。"""
+        dets = detections if detections is not None else yolo_results_to_detections(yolo_result)
+        return draw_algorithm_detections(frame, dets)
 
     def _find_default_models(self) -> list:
         """查找AI目录下的默认模型文件（yolo11n.pt、yolov8n.pt 或 yolo26n.pt）
@@ -976,21 +998,33 @@ class InferenceService:
             class_ids = self._resolve_class_ids(model, parameters)
             
             if is_onnx:
-                # 使用新的ONNX推理模块
-                output_image, detections = model.detect(
+                frame_bgr = cv2.imread(temp_path)
+                _, detections = model.detect(
                     temp_path,
                     conf_threshold=conf_thres,
                     iou_threshold=iou_thres,
-                    draw=True,
+                    draw=False,
                     class_ids=class_ids,
                 )
-                # 将ONNX结果转换为与YOLO结果兼容的格式
-                # 创建一个模拟的Results对象
+                if frame_bgr is not None:
+                    output_image = self._annotate_frame_algorithm_style(
+                        frame_bgr,
+                        detections=detections,
+                    )
+                else:
+                    output_image, detections = model.detect(
+                        temp_path,
+                        conf_threshold=conf_thres,
+                        iou_threshold=iou_thres,
+                        draw=False,
+                        class_ids=class_ids,
+                    )
+
                 class ONNXResults:
                     def __init__(self, image, detections):
                         self.image = image
                         self.detections = detections
-                
+
                 results = [ONNXResults(output_image, detections)]
             else:
                 # 使用YOLO模型推理
@@ -1088,9 +1122,18 @@ class InferenceService:
                 # 使用ONNX推理返回的检测结果
                 detections = result_obj.detections
             else:
-                # YOLO推理结果
-                # 保存结果图像到临时文件
-                _save_yolo_annotated_image(results[0], result_image_path)
+                # YOLO推理结果：使用与 VIDEO 算法任务一致的绿框样式
+                orig_img = results[0].orig_img
+                if orig_img is None:
+                    orig_img = cv2.imread(result_image_path) if os.path.exists(result_image_path) else None
+                if orig_img is None:
+                    _save_yolo_annotated_image(results[0], result_image_path)
+                else:
+                    annotated = self._annotate_frame_algorithm_style(
+                        orig_img,
+                        yolo_result=results[0],
+                    )
+                    cv2.imwrite(result_image_path, annotated)
 
                 # 提取检测结果
                 detections = []
@@ -1390,20 +1433,25 @@ class InferenceService:
                     # 跳帧策略
                     if frame_count % frame_skip == 0:
                         if is_onnx:
-                            # 使用新的ONNX推理模块
-                            annotated_frame, _ = model.detect(
+                            _, detections = model.detect(
                                 frame,
                                 conf_threshold=conf_thres,
                                 iou_threshold=iou_thres,
-                                draw=True,
+                                draw=False,
                                 class_ids=class_ids,
                             )
-                            # 将标注后的帧调整回原始尺寸
+                            annotated_frame = self._annotate_frame_algorithm_style(
+                                frame,
+                                detections=detections,
+                            )
                             annotated_frame = cv2.resize(annotated_frame, frame_size, interpolation=cv2.INTER_LINEAR)
                         else:
                             # 使用YOLO模型推理
                             results = model(frame, **inference_kwargs)
-                            annotated_frame = results[0].plot()
+                            annotated_frame = self._annotate_frame_algorithm_style(
+                                frame,
+                                yolo_result=results[0],
+                            )
                         out.write(annotated_frame)
                         processed_frames += 1
                     else:
@@ -1638,22 +1686,12 @@ class InferenceService:
 
         try:
             model = self.get_model()
-            
-            # 判断是否为ONNX模型（通过检查model是否为ONNXInference实例）
-            is_onnx = isinstance(model, ONNXInference)
-            
-            # 构建推理参数
-            conf_thres = parameters.get('conf_thres', 0.25) if parameters else 0.25
-            iou_thres = parameters.get('iou_thres', 0.45) if parameters else 0.45
-            
-            if is_onnx:
-                logging.info(f"RTSP流推理：使用ONNX模型")
-            else:
-                inference_kwargs = {
-                    'conf': conf_thres,
-                    'iou': iou_thres,
-                    'verbose': False
-                }
+            model_label = getattr(model, 'model_path', None) or self.specified_model_path or str(self.model_id)
+            logging.info(f'RTSP流推理模型: {model_label}')
+
+            class_ids = self._resolve_class_ids(model, parameters)
+            class_id_set = set(class_ids) if class_ids else None
+            model_path = getattr(model, 'model_path', None) or self.specified_model_path or ''
 
             reader = self._open_input_reader(input_candidates, stop_event, session_key)
             input_url = reader.url
@@ -1664,6 +1702,39 @@ class InferenceService:
             if width <= 0 or height <= 0:
                 raise RuntimeError(f'输入流无有效视频帧: {input_url}')
 
+            detect_config = build_stream_detect_config(
+                model,
+                frame_height=height,
+                model_path=str(model_path),
+                model_id=self.model_id,
+                parameters=parameters,
+                infer_device=self.device,
+            )
+            try:
+                extract_interval = int(
+                    parameters.get('stream_extract_interval')
+                    or parameters.get('frame_skip')
+                    or os.getenv('OVERLAY_EXTRACT_INTERVAL', '5')
+                )
+            except (TypeError, ValueError):
+                extract_interval = 5
+            extract_interval = max(1, extract_interval)
+
+            cap_fps = int(os.getenv('STREAM_OUTPUT_FPS', os.getenv('AI_OUTPUT_FPS', '25')))
+            output_fps = max(1, min(int(fps or 25), cap_fps))
+
+            logging.info(
+                f'RTSP流推理参数(对齐算法任务): conf={detect_config["conf"]:.2f} '
+                f'iou={detect_config["iou"]:.2f} imgsz={detect_config["imgsz"]} '
+                f'overlay_interval={extract_interval} output_fps={output_fps} '
+                f'classes={sorted(class_id_set) if class_id_set else "all"}'
+            )
+
+            try:
+                warmup_stream_detection(model, detect_config=detect_config)
+            except Exception as warmup_err:
+                logging.warning(f'RTSP流推理预热失败（继续运行）: {warmup_err}')
+
             # FFmpeg推流命令 - 根据平台选择编码器
             if platform.system() == "Darwin":  # macOS
                 command = [
@@ -1673,7 +1744,7 @@ class InferenceService:
                     '-vcodec', 'rawvideo',
                     '-pix_fmt', 'bgr24',
                     '-s', f'{width}x{height}',
-                    '-r', str(fps),
+                    '-r', str(output_fps),
                     '-i', '-',
                     '-c:v', 'h264_videotoolbox',
                     '-profile:v', 'main',
@@ -1692,7 +1763,7 @@ class InferenceService:
                     '-vcodec', 'rawvideo',
                     '-pix_fmt', 'bgr24',
                     '-s', f'{width}x{height}',
-                    '-r', str(fps),
+                    '-r', str(output_fps),
                     '-i', '-',
                     '-c:v', 'libx264',
                     '-preset', 'ultrafast',
@@ -1715,40 +1786,19 @@ class InferenceService:
             record.status = 'RUNNING'
             db.session.commit()
 
-            # 流处理循环
-            frame_skip = parameters.get('frame_skip', 2)
-            frame_count = 0
-
-            while reader.alive and not stop_event.is_set():
-                frame = reader.read()
-                if frame is None:
-                    time.sleep(0.02)
-                    continue
-
-                # 跳帧处理
-                if frame_count % frame_skip == 0:
-                    if is_onnx:
-                        processed_frame, _ = model.detect(
-                            frame,
-                            conf_threshold=conf_thres,
-                            iou_threshold=iou_thres,
-                            draw=True
-                        )
-                        processed_frame = cv2.resize(processed_frame, (width, height), interpolation=cv2.INTER_LINEAR)
-                    else:
-                        results = model(frame, **inference_kwargs)
-                        processed_frame = results[0].plot()
-                    try:
-                        ffmpeg_process.stdin.write(processed_frame.tobytes())
-                    except BrokenPipeError:
-                        break
-                else:
-                    try:
-                        ffmpeg_process.stdin.write(frame.tobytes())
-                    except BrokenPipeError:
-                        break
-
-                frame_count += 1
+            # 推流与推理分离：主循环只读帧叠 overlay，检测与固定帧率推流在独立线程
+            pipeline = RtspStreamPipeline(
+                reader=reader,
+                ffmpeg_process=ffmpeg_process,
+                model=model,
+                detect_config=detect_config,
+                stop_event=stop_event,
+                class_ids=class_id_set,
+                extract_interval=extract_interval,
+                output_fps=output_fps,
+                log_interval=max(1, output_fps * 6),
+            )
+            pipeline.run()
 
             # 流结束
             record = InferenceTask.query.get(record_id)
