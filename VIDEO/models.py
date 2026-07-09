@@ -474,13 +474,15 @@ class SnapImage(db.Model):
             pass
         elif not (display_url or '').startswith('/api/'):
             display_url = build_snap_image_api_url(self.space_id, self.object_name)
+        from app.utils.service_urls import shanghai_isoformat
+
         return {
             'id': self.id,
             'object_name': self.object_name,
             'filename': self.filename,
             'size': self.file_size or 0,
-            'last_modified': utc_isoformat_z(self.captured_at),
-            'captured_at': utc_isoformat_z(self.captured_at),
+            'last_modified': shanghai_isoformat(self.captured_at),
+            'captured_at': shanghai_isoformat(self.captured_at),
             'source': self.source or 'snap',
             'task_id': self.task_id,
             'etag': self.etag or '',

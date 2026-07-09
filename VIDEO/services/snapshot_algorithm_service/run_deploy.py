@@ -77,6 +77,8 @@ from app.utils.plate_capture_queue_service import (
     PLATE_CAPTURE_WORKER_THREADS,
 )
 from app.utils.service_urls import (
+    epoch_to_shanghai_datetime,
+    now_shanghai_naive,
     resolve_alert_hook_url,
     resolve_face_matching_publish_url,
     resolve_plate_matching_publish_url,
@@ -89,6 +91,11 @@ from app.utils.rtsp_stream_utils import (
     is_likely_rtsp_flat_corrupt_frame,
     task_streams_prefer_tcp,
 )
+
+
+def _shanghai_time_str(timestamp: float) -> str:
+    """Unix 时间戳格式化为东八区墙钟字符串（与告警/抓拍入库一致）。"""
+    return epoch_to_shanghai_datetime(timestamp).strftime('%Y-%m-%d %H:%M:%S')
 
 
 def _parse_gpu_id_list(value: str) -> List[int]:
@@ -572,6 +579,7 @@ def upload_frame_to_snap_space(device_id: str, frame: np.ndarray) -> bool:
                         bucket_name=bucket_name,
                         file_size=len(data),
                         source='algorithm',
+                        captured_at=now_shanghai_naive(),
                     )
         except Exception as meta_err:
             logger.debug(f"设备 {device_id} 写入抓拍元数据失败: {meta_err}")
@@ -1327,7 +1335,7 @@ def should_extract_frame_by_cron(device_id: str, current_time: float) -> bool:
                 return False
             if device_cron_match_logged_slot.get(device_id) != fire_time:
                 device_cron_match_logged_slot[device_id] = fire_time
-                current_dt = datetime.fromtimestamp(current_time)
+                current_dt = epoch_to_shanghai_datetime(current_time)
                 logger.info(
                     f"⏰ 设备 {device_id} cron 匹配，允许抽帧: "
                     f"当前={current_dt.strftime('%H:%M:%S')}, "
@@ -1403,7 +1411,7 @@ def try_send_snapshot_detection_alert(
         'device_name': device_name,
         'face_detection_enabled': bool(getattr(task_config, 'face_detection_enabled', False)),
         'plate_detection_enabled': bool(getattr(task_config, 'plate_detection_enabled', False)),
-        'time': datetime.fromtimestamp(frame_timestamp).strftime('%Y-%m-%d %H:%M:%S'),
+        'time': _shanghai_time_str(frame_timestamp),
         'correlation_id': correlation_id,
         'information': json.dumps({
             'total_count': len(detections),
@@ -2221,7 +2229,7 @@ def buffer_streamer_worker(device_id: str):
                 mark_cron_slot_captured(device_id, current_timestamp)
                 logger.info(
                     f"📸 设备 {device_id} cron 抽帧已入检测队列: 帧号={frame_count}, "
-                    f"时间={datetime.fromtimestamp(current_timestamp).strftime('%Y-%m-%d %H:%M:%S')}"
+                    f"时间={_shanghai_time_str(current_timestamp)}"
                 )
 
             _cleanup_stale_pending_snapshots(device_id)

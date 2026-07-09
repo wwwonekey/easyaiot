@@ -151,6 +151,22 @@ def epoch_to_shanghai_datetime(ts: float) -> datetime:
     return datetime.fromtimestamp(float(ts), tz=timezone.utc).astimezone(SHANGHAI_TZ)
 
 
+def now_shanghai_naive() -> datetime:
+    """当前东八区墙钟（naive），与 captured_at / event_time 存储约定一致。"""
+    return datetime.now(SHANGHAI_TZ).replace(tzinfo=None)
+
+
+def shanghai_isoformat(dt) -> str | None:
+    """东八区墙钟序列化为 ISO-8601（+08:00），便于前端按本地时间展示。"""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        aware = dt.replace(tzinfo=SHANGHAI_TZ)
+    else:
+        aware = dt.astimezone(SHANGHAI_TZ)
+    return aware.isoformat()
+
+
 def save_time_cutoff_naive(save_time_hours) -> datetime | None:
     """东八区 naive 截止时间，与 event_time/captured_at（东八区墙钟）直接比较。
 
