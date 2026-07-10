@@ -440,7 +440,7 @@ public class AlertServiceImpl implements AlertService {
                 fileExt = ".jpg"; // 默认扩展名
             }
 
-            LocalDateTime now = LocalDateTime.now();
+            LocalDateTime now = LocalDateTime.now(ALERT_EVENT_ZONE);
             String dateDir = now.format(DateTimeFormatter.ofPattern("yyyy/MM/dd"));
             String timestamp = now.format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"));
             String objectName = String.format("%s/%s/snapshot_%s_%s%s", 
@@ -607,7 +607,7 @@ public class AlertServiceImpl implements AlertService {
                 fileExt = ".jpg"; // 默认扩展名
             }
 
-            LocalDateTime now = LocalDateTime.now();
+            LocalDateTime now = LocalDateTime.now(ALERT_EVENT_ZONE);
             String dateDir = now.format(DateTimeFormatter.ofPattern("yyyy/MM/dd"));
             String timestamp = now.format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"));
             String objectName = String.format("%s/alert_%s_%s_%s%s", 
